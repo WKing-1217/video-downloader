@@ -90,7 +90,14 @@ def main():
         release_dir = ROOT / "release"
         tag = "v" + APP_VERSION
         response = client.get(f"https://api.github.com/repos/{REPOSITORY}/releases/tags/{tag}", timeout=20)
-        body = (release_dir / "使用说明.md").read_text(encoding="utf-8")
+        instructions = release_dir / "使用说明.md"
+        if instructions.is_file():
+            body = instructions.read_text(encoding="utf-8")
+        else:
+            manifest = json.loads((release_dir / "update.json").read_text(encoding="utf-8"))
+            body = (f"# 视频下载器 {APP_VERSION}\n\n" + manifest.get("notes", "")
+                    + "\n\nWindows 下载 VideoDownloader-Windows-Setup.exe；Android 下载 VideoDownloader-Android.apk。"
+                    + "\n\n安装到原目录即可升级。使用方法和构建说明见仓库 README。")
         if response.status_code == 404:
             release = api(client, "POST", f"/repos/{REPOSITORY}/releases", json={"tag_name": tag,
                           "name": "视频下载器 " + APP_VERSION, "body": body, "draft": True})
