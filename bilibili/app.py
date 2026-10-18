@@ -15,11 +15,14 @@ from PySide6.QtWidgets import (
 from platform_links import PLATFORMS, resolve_link
 from runtime_paths import APP_DIR, FROZEN, output_dir, read_settings, save_output, save_settings, worker_command
 from updater import UpdateController
+from app_version import APP_VERSION
 
 ROOT = Path(__file__).resolve().parent
 OUTPUT = output_dir()
 TOKENS = {"background": "#f5f6fa", "surface": "#ffffff", "text": "#202533",
           "muted": "#697386", "accent": "#dc4775", "border": "#e2e5ed"}
+HEADER_METRICS = {"inset": 36, "top": 30, "gap": 14, "version_size": 16,
+                  "update_size": 17, "button_padding_y": 10, "button_padding_x": 14}
 
 
 def clock(seconds):
@@ -59,20 +62,40 @@ class DownloadWindow(QMainWindow):
         self.web_login = None
         self.platform = None
         self.stderr = b""
+        central = QWidget()
+        central.setObjectName("windowRoot")
+        shell = QVBoxLayout(central)
+        shell.setContentsMargins(0, 0, 0, 0)
+        shell.setSpacing(0)
+        self.header = QWidget()
+        self.header.setObjectName("appHeader")
+        header_row = QHBoxLayout(self.header)
+        header_row.setContentsMargins(HEADER_METRICS["inset"], HEADER_METRICS["top"], HEADER_METRICS["inset"], 0)
+        header_row.setSpacing(HEADER_METRICS["gap"])
+        heading = QLabel("视频下载器")
+        heading.setObjectName("heading")
+        header_row.addWidget(heading)
+        header_row.addStretch(1)
+        self.current_version = QLabel("当前版本 v" + APP_VERSION)
+        self.current_version.setObjectName("currentVersion")
+        header_row.addWidget(self.current_version)
+        self.update_button = QPushButton("检查更新")
+        self.update_button.setObjectName("updateButton")
+        self.update_button.setProperty("updateAvailable", False)
+        header_row.addWidget(self.update_button)
+        shell.addWidget(self.header)
         root = QWidget()
         root.setObjectName("content")
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
         scroll.setWidget(root)
-        self.setCentralWidget(scroll)
+        self.scroll_area = scroll
+        shell.addWidget(scroll, 1)
+        self.setCentralWidget(central)
         layout = QVBoxLayout(root)
-        layout.setContentsMargins(36, 30, 36, 28)
+        layout.setContentsMargins(HEADER_METRICS["inset"], 18, HEADER_METRICS["inset"], 28)
         layout.setSpacing(18)
-
-        heading = QLabel("视频下载器")
-        heading.setObjectName("heading")
-        layout.addWidget(heading)
         box = QFrame()
         box.setObjectName("card")
         form = QVBoxLayout(box)
@@ -150,9 +173,6 @@ class DownloadWindow(QMainWindow):
         options_row = QHBoxLayout()
         options_row.addWidget(self.advanced_toggle)
         options_row.addStretch()
-        self.update_button = QPushButton("检查更新")
-        self.update_button.setObjectName("updateLink")
-        options_row.addWidget(self.update_button)
         layout.addLayout(options_row)
         self.advanced = QWidget()
         extra = QVBoxLayout(self.advanced)
@@ -192,8 +212,9 @@ class DownloadWindow(QMainWindow):
         layout.addLayout(destination_row)
         self.setStyleSheet("""
             QWidget {color: %(text)s; font-family: 'Microsoft YaHei UI'; font-size: 17px;}
-            QMainWindow, QScrollArea, QWidget#content {background: %(background)s;}
+            QMainWindow, QScrollArea, QWidget#content, QWidget#windowRoot, QWidget#appHeader {background: %(background)s;}
             QLabel#heading {font-size: 30px; font-weight: 700;}
+            QLabel#currentVersion {color: %(muted)s; font-size: %(version_size)spx;}
             QLabel#taskTitle {font-size: 22px; font-weight: 600;}
             QLabel#muted {color: %(muted)s; font-size: 15px;}
             QFrame#card {background: %(surface)s; border: 1px solid %(border)s; border-radius: 16px;}
@@ -216,12 +237,13 @@ class DownloadWindow(QMainWindow):
             QPushButton#primary {background: %(accent)s; color: white; border: none; font-weight: 600;}
             QPushButton#primary:hover {background: #c83765;}
             QPushButton#primary:disabled {background: #c9a8b3;}
-            QPushButton#updateLink {background: transparent; color: %(muted)s; border: none; font-size: 15px; padding: 6px 12px;}
-            QPushButton#updateLink:hover {color: %(accent)s;}
+            QPushButton#updateButton {font-size: %(update_size)spx; padding: %(button_padding_y)spx %(button_padding_x)spx;}
+            QPushButton#updateButton[updateAvailable="true"] {background: %(accent)s; color: white; border-color: %(accent)s; font-weight: 600;}
+            QPushButton#updateButton[updateAvailable="true"]:hover {background: #c83765; border-color: #c83765;}
             QProgressBar {background: #e4e7ee; border: none; border-radius: 5px; height: 10px; max-height: 10px;}
             QProgressBar::chunk {background: %(accent)s; border-radius: 5px;}
             QCheckBox {spacing: 8px; font-size: 15px; color: %(muted)s;}
-        """ % {**TOKENS, "chevron": (ROOT / "assets/chevron-down.svg").as_posix()})
+        """ % {**TOKENS, **HEADER_METRICS, "chevron": (ROOT / "assets/chevron-down.svg").as_posix()})
         for label in self.findChildren(QLabel):
             label.setTextFormat(Qt.PlainText)
         if auto_scan:

@@ -21,7 +21,7 @@ class Preview(QObject):
     busy = Property(bool, lambda s: False, notify=changed)
     complete = Property(bool, lambda s: True, notify=changed)
     progress = Property(float, lambda s: 1.0, notify=changed)
-    version = Property(str, lambda s: "1.0.3", notify=changed)
+    version = Property(str, lambda s: "1.0.4", notify=changed)
     updateStatus = Property(str, lambda s: "已经是最新版本", notify=changed)
     updateAvailable = Property(bool, lambda s: False, notify=changed)
     autoUpdate = Property(bool, lambda s: True, notify=changed)

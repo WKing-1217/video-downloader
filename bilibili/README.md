@@ -104,4 +104,6 @@ FFmpeg 可用 `winget install --id Gyan.FFmpeg --exact` 安装，安装后重新
 
 两端启动时从 GitHub Release 检查新版本，也可点击“检查更新”。Windows 校验安装包大小及 SHA-256 后，由用户点击安装；安装到原目录，视频下载期间禁止升级。Android 发现新版后打开 GitHub APK 下载链接，由系统确认覆盖安装。更多选项中可关闭启动检查。更新请求不使用视频网站登录信息。
 
+Windows 当前版本和更新按钮固定在右上角标题行，滚动页面时仍然可见；发现新版时按钮会突出显示完整的新版本号。
+
 项目：https://github.com/WKing-1217/video-downloader

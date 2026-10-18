@@ -51,10 +51,20 @@ class UpdateController(QObject):
         self.installer = None
         self.dialog = None
 
+    def refresh_button(self, *, checking=False):
+        button = self.window.update_button
+        available = bool(self.info and self.info.available)
+        button.setText("正在检查…" if checking else f"发现新版本 v{self.info.version}" if available else "检查更新")
+        button.setProperty("updateAvailable", available)
+        button.setToolTip(f"当前版本 v{APP_VERSION}" + (f"，可更新至 v{self.info.version}" if available else ""))
+        button.style().unpolish(button)
+        button.style().polish(button)
+        button.update()
+
     def check(self, *, manual=False):
         if any(job.isRunning() for job in self.jobs):
             return
-        self.window.update_button.setText("正在检查…")
+        self.refresh_button(checking=True)
         self.window.update_button.setEnabled(False)
         job = UpdateJob()
         self.jobs.append(job)
@@ -65,7 +75,7 @@ class UpdateController(QObject):
 
     def job_finished(self, job):
         self.window.update_button.setEnabled(True)
-        self.window.update_button.setText("发现新版本" if self.info and self.info.available else "检查更新")
+        self.refresh_button()
         if job in self.jobs:
             self.jobs.remove(job)
         job.deleteLater()
@@ -74,6 +84,7 @@ class UpdateController(QObject):
         if not self.info or self.info.version != info.version:
             self.installer = None
         self.info = info
+        self.refresh_button()
         if info.available:
             self.window.logs.appendPlainText("发现新版本 " + info.version + "，可点击「发现新版本」更新。")
         if manual:
