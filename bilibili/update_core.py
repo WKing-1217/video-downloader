@@ -18,7 +18,11 @@ MAX_INSTALLER = 1024 ** 3
 
 
 class UpdateError(Exception):
-    pass
+    retryable = False
+
+
+class UpdateNetworkError(UpdateError):
+    retryable = True
 
 
 class UpdateCancelled(UpdateError):
@@ -52,6 +56,7 @@ class UpdateInfo:
     size: int
     notes: str
     available: bool
+    release_url: str = ""
 
 
 def parse_manifest(data, *, current_version=APP_VERSION, platform="windows", allow_loopback=False):
@@ -75,28 +80,70 @@ def parse_manifest(data, *, current_version=APP_VERSION, platform="windows", all
                       notes[:4000] if isinstance(notes, str) else "", newer)
 
 
+def parse_release(data, *, current_version=APP_VERSION, platform="windows", allow_loopback=False):
+    if not isinstance(data, dict) or data.get("draft") or data.get("prerelease"):
+        raise UpdateError("未找到可用的正式发布版本。")
+    version = str(data.get("tag_name") or "")
+    newer = version_parts(version) > version_parts(current_version)
+    name = "VideoDownloader-Windows-Setup.exe" if platform == "windows" else "VideoDownloader-Android.apk"
+    asset = next((item for item in data.get("assets", []) if item.get("name") == name), None)
+    if not asset:
+        raise UpdateError("最新发布尚未提供当前系统的安装包。")
+    url = asset.get("browser_download_url")
+    if not permitted_url(url, allow_loopback=allow_loopback):
+        raise UpdateError("GitHub 安装包地址与项目配置不符。")
+    digest = asset.get("digest") or ""
+    if digest and not re.fullmatch(r"sha256:[0-9a-fA-F]{64}", digest):
+        raise UpdateError("GitHub 提供的安装包校验值无效。")
+    size = asset.get("size", 0)
+    if type(size) is not int or not 0 <= size <= MAX_INSTALLER:
+        raise UpdateError("GitHub 安装包大小无效。")
+    notes = data.get("body") or "此版本未提供更新说明。"
+    return UpdateInfo(version.lstrip("v"), url, digest[7:].lower(), size,
+                      str(notes)[:64000], newer, f"https://github.com/{REPOSITORY}/releases/tag/{version}")
+
+
 class UpdateClient:
-    def __init__(self, *, manifest_url=UPDATE_URL, allow_loopback=False, cancelled=None):
+    def __init__(self, *, manifest_url=UPDATE_URL, api_url=None, allow_loopback=False, cancelled=None):
         self.manifest_url = manifest_url
+        self.api_url = api_url or (f"https://api.github.com/repos/{REPOSITORY}/releases/latest" if manifest_url == UPDATE_URL else None)
         self.allow_loopback = allow_loopback
         self.cancelled = cancelled or threading.Event()
-        self.session = requests.Session()
-        self.session.trust_env = False  # Public updates must not load .netrc credentials.
-        self.session.headers.update({"User-Agent": f"VideoDownloader/{APP_VERSION}", "Cache-Control": "no-cache"})
+        self.sessions = []
+        self.session_lock = threading.Lock()
+        self.local = threading.local()
+        self.proxies = {}
         proxy = windows_system_proxy()
         environment = urllib.request.getproxies_environment()
         for scheme in ("http", "https"):
             route = environment.get(scheme) or environment.get("all") or proxy
             if route:
-                self.session.proxies[scheme] = route
+                self.proxies[scheme] = route
+        self.session = self._new_session()
+
+    def _new_session(self):
+        session = requests.Session()
+        session.trust_env = False
+        session.headers.update({"User-Agent": f"VideoDownloader/{APP_VERSION}", "Cache-Control": "no-cache"})
+        session.proxies.update(self.proxies)
+        with self.session_lock:
+            self.sessions.append(session)
+        return session
 
     def close(self):
-        self.session.close()
+        for session in self.sessions:
+            session.close()
 
-    def _request(self, url):
-        if not permitted_url(url, allow_loopback=self.allow_loopback):
+    def _request(self, url, headers=None):
+        api = urlparse(url)
+        official_api = (api.scheme == "https" and api.hostname == "api.github.com" and api.port is None
+                        and not api.username and not api.password and api.path.startswith(f"/repos/{REPOSITORY}/releases"))
+        if not official_api and not permitted_url(url, allow_loopback=self.allow_loopback):
             raise UpdateError("更新来源地址无效。")
         self._cancel()
+        if not hasattr(self.local, "session"):
+            self.local.session = self._new_session()
+        deadline = time.monotonic() + 30
         try:
             for hop in range(6):
                 parsed = urlparse(url)
@@ -104,8 +151,11 @@ class UpdateClient:
                 if parsed.scheme != "https" and not (local and parsed.scheme == "http"):
                     raise UpdateError("更新连接未使用 HTTPS。")
                 self._cancel()
-                response = self.session.get(url, params={"t": int(time.time())} if hop == 0 else None,
-                                            stream=True, timeout=(5, 3), allow_redirects=False,
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise UpdateNetworkError("连接 GitHub 超时，可重试或打开官方 Releases。")
+                response = self.local.session.get(url, params={"t": int(time.time())} if hop == 0 else None,
+                                            headers=headers, stream=True, timeout=(min(5, remaining), min(8, remaining)), allow_redirects=False,
                                             proxies={"http": None, "https": None, "all": None} if local else None)
                 if response.is_redirect:
                     url = urljoin(response.url, response.headers["Location"])
@@ -118,58 +168,62 @@ class UpdateClient:
                     raise
                 return response
             raise UpdateError("更新连接重定向次数过多。")
+        except requests.Timeout as error:
+            raise UpdateNetworkError("连接 GitHub 超时，请检查网络或使用官方 Releases 下载。") from error
+        except requests.exceptions.ProxyError as error:
+            raise UpdateNetworkError("系统代理连接失败，请检查代理设置后重试。") from error
+        except requests.HTTPError as error:
+            code = error.response.status_code if error.response is not None else 0
+            message = "GitHub 暂时限制请求，请稍后重试。" if code in {403, 429} else f"GitHub 返回 HTTP {code}，请稍后重试。"
+            raise UpdateNetworkError(message) from error
         except requests.RequestException as error:
-            raise UpdateError("暂时无法连接 GitHub，请检查网络后重试。") from error
+            raise UpdateNetworkError("无法连接 GitHub，请检查网络、系统代理或打开官方 Releases。") from error
 
     def _cancel(self):
         if self.cancelled.is_set():
             raise UpdateCancelled("已取消更新。")
 
-    def check(self, *, current_version=APP_VERSION, platform="windows"):
+    def _json(self, url, limit=MAX_MANIFEST):
         import json
         body = bytearray()
         try:
-            with self._request(self.manifest_url) as response:
+            with self._request(url) as response:
                 for chunk in response.iter_content(8192):
                     self._cancel()
                     body.extend(chunk)
-                    if len(body) > MAX_MANIFEST:
+                    if len(body) > limit:
                         raise UpdateError("更新信息过大。")
-            data = json.loads(body.decode("utf-8"))
+            return json.loads(body.decode("utf-8"))
         except (ValueError, UnicodeError, requests.RequestException) as error:
             raise UpdateError("未能读取有效更新信息，请稍后重试。") from error
-        return parse_manifest(data, current_version=current_version, platform=platform,
-                              allow_loopback=self.allow_loopback)
+    def check(self, *, current_version=APP_VERSION, platform="windows"):
+        api_error = None
+        if self.api_url:
+            try:
+                info = parse_release(self._json(self.api_url, 512 * 1024), current_version=current_version,
+                                     platform=platform, allow_loopback=self.allow_loopback)
+                if not info.sha256:
+                    try:
+                        fallback = parse_manifest(self._json(self.manifest_url), current_version=current_version,
+                                                  platform=platform, allow_loopback=self.allow_loopback)
+                        if fallback.version == info.version and fallback.url == info.url:
+                            from dataclasses import replace
+                            info = replace(info, sha256=fallback.sha256, size=info.size or fallback.size)
+                    except UpdateError:
+                        pass
+                return info
+            except UpdateError as error:
+                api_error = error
+        try:
+            return parse_manifest(self._json(self.manifest_url), current_version=current_version,
+                                  platform=platform, allow_loopback=self.allow_loopback)
+        except UpdateError as error:
+            if api_error:
+                raise UpdateError(str(api_error) + "\n备用更新清单也未能读取，请重试。") from error
+            raise
 
-    def download(self, info, folder, progress=None):
+    def download(self, info, folder, progress=None, stage=None):
         if not info.available:
             raise UpdateError("当前已经是最新版本。")
-        folder = Path(folder)
-        folder.mkdir(parents=True, exist_ok=True)
-        target = folder / "VideoDownloader-Update.exe"
-        part = target.with_suffix(".exe.part")
-        digest = hashlib.sha256()
-        count = 0
-        try:
-            with self._request(info.url) as response, part.open("wb") as output:
-                length = response.headers.get("Content-Length")
-                if length and int(length) != info.size:
-                    raise UpdateError("更新包大小与发布信息不一致，请稍后重试。")
-                for chunk in response.iter_content(65536):
-                    self._cancel()
-                    count += len(chunk)
-                    if count > info.size:
-                        raise UpdateError("更新包超出了发布信息中的大小。")
-                    output.write(chunk)
-                    digest.update(chunk)
-                    if progress:
-                        progress(count, info.size)
-            if count != info.size or digest.hexdigest() != info.sha256:
-                raise UpdateError("更新包校验失败，未运行安装程序。请重新检查更新。")
-            part.replace(target)
-            return target
-        except (OSError, ValueError, requests.RequestException) as error:
-            raise UpdateError("更新包下载未完成，请重试。") from error
-        finally:
-            if part.exists():
-                part.unlink()
+        from update_transfer import transfer
+        return transfer(self, info, folder, progress, stage)

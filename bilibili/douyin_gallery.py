@@ -168,9 +168,11 @@ def download_gallery(info, ydl, output, emit, probe_media):
     emit("metadata", title=title, content_type="gallery", image_count=info["image_count"],
          live_photo_count=sum(a["kind"] == "live_photo" for a in assets))
     saved = []
+    pending = output / ".downloads" / ("gallery-" + str(info["id"]))
+    pending.mkdir(parents=True, exist_ok=True)
     for number, asset in enumerate(assets, 1):
         emit("stage", message=f"正在导出 {number}/{len(assets)} · {asset['name']}…")
-        temporary = folder / (asset["name"] + ".part")
+        temporary = pending / (asset["name"] + ".part")
         verified = None
         failure = None
         for url in asset["urls"]:
@@ -214,6 +216,12 @@ def download_gallery(info, ydl, output, emit, probe_media):
               "music_count": sum(a["kind"] == "music" for a in saved), "assets": saved,
               "size": sum(a["size"] for a in saved)}
     receipt = folder / "作品信息.json"
-    receipt.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+    pending_receipt = receipt.with_suffix(".tmp")
+    pending_receipt.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+    pending_receipt.replace(receipt)
+    try:
+        pending.rmdir()
+    except OSError:
+        pass
     emit("complete", **result)
     return result

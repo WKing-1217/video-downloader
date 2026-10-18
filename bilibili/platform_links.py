@@ -1,7 +1,7 @@
 """Recognize supported video links without requesting any web page."""
 from dataclasses import dataclass
 import re
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlparse, urlencode
 
 
 @dataclass(frozen=True)
@@ -64,3 +64,29 @@ def resolve_link(text: str) -> tuple[str, Platform]:
 
 def normalize_url(text: str) -> str:
     return resolve_link(text)[0]
+
+
+def download_link(text: str) -> tuple[str, Platform, str]:
+    """Validate a post, not just a supported domain; return a tracking-free key."""
+    url, site = resolve_link(text)
+    parsed = urlparse(url)
+    path = parsed.path.rstrip("/")
+    host = parsed.hostname.lower()
+    short = host in {"b23.tv", "v.douyin.com", "t.co"}
+    valid = bool(re.fullmatch(r"/[A-Za-z0-9_-]{3,}", path)) if short else False
+    if site.key == "bilibili" and not short:
+        valid = bool(re.fullmatch(r"/video/(?:BV[0-9A-Za-z]+|av\d+)", path)
+                     or re.fullmatch(r"/bangumi/play/(?:ep|ss)\d+", path))
+        host = "www.bilibili.com"
+    elif site.key == "douyin" and not short:
+        valid = bool(re.fullmatch(r"/(?:video|note|slides)/\d+", path))
+        host = "www.douyin.com"
+    elif site.key == "x" and not short:
+        valid = bool(re.fullmatch(r"/[^/]+/status/\d+(?:/video/\d+)?", path))
+        host = "x.com"
+    if not valid:
+        raise ValueError("这不是具体的视频或作品链接，请复制视频的分享链接。")
+    query = parse_qs(parsed.query)
+    selected = {"p": query["p"][0]} if site.key == "bilibili" and query.get("p", [""])[0].isdigit() else {}
+    canonical = f"https://{host}{path}" + ("?" + urlencode(selected) if selected else "")
+    return url, site, canonical

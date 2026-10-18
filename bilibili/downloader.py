@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 from datetime import datetime
 import json
+import hashlib
 import math
 from pathlib import Path
 import shutil
@@ -13,12 +14,12 @@ from urllib.parse import urlparse
 
 import yt_dlp
 from browser_accounts import cookie_summary, scan_accounts, select_account, session_cookie_jar
-from platform_links import PLATFORMS, normalize_url, resolve_link
+from platform_links import PLATFORMS, normalize_url, resolve_link, download_link
 from network_settings import windows_system_proxy
 from parallel_http import AcceleratedYoutubeDL
 from bilibili_adapter import BiliBiliIE
 from douyin_adapter import DouyinIE
-from douyin_gallery import download_gallery
+from douyin_gallery import download_gallery, gallery_proxies
 from runtime_paths import configure_tools, output_dir, tool
 
 ROOT = Path(__file__).resolve().parent
@@ -95,9 +96,12 @@ def media_candidates(prepared):
     return list(dict.fromkeys([path, *(path.with_suffix(ext) for ext in (".mp4", ".mkv", ".webm"))]))
 
 
-def quarantine_incomplete(info, ydl, expected):
+def quarantine_incomplete(info, ydl, expected, directory=None):
     """A failed final file must not make every retry reuse the same bad media."""
-    for path in media_candidates(ydl.prepare_filename(info)):
+    prepared = ydl.prepare_filename(info)
+    if directory is not None:
+        prepared = Path(directory) / Path(prepared).name
+    for path in media_candidates(prepared):
         if not path.is_file():
             continue
         try:
@@ -123,6 +127,12 @@ def download(url: str, cookie_file: str | None = None, *, auto_cookies=True, bro
     if cookie_file and not Path(cookie_file).is_file():
         raise ValueError("选择的 Cookie 文件不存在。")
     OUTPUT.mkdir(parents=True, exist_ok=True)
+    try:
+        source_key = download_link(url)[2]
+    except ValueError:
+        source_key = url
+    temporary = OUTPUT / ".downloads" / hashlib.sha256(source_key.encode()).hexdigest()[:20]
+    temporary.mkdir(parents=True, exist_ok=True)
     final_paths = []
     last_progress = [0.0]
 
@@ -148,7 +158,8 @@ def download(url: str, cookie_file: str | None = None, *, auto_cookies=True, bro
     options = {
         "format": "bestvideo+bestaudio/best",
         "format_sort": ["res", "fps", "hdr:12", "vcodec", "channels", "acodec", "abr", "vbr"],
-        "outtmpl": str(OUTPUT / "%(title).100B [%(id)s] [%(format_id)s].%(ext)s"),
+        "outtmpl": "%(title).100B [%(id)s] [%(format_id)s].%(ext)s",
+        "paths": {"home": str(temporary), "temp": str(temporary)},
         "merge_output_format": "mp4/mkv",
         "noplaylist": True, "windowsfilenames": True,
         "continuedl": True, "retries": 8, "fragment_retries": 8,
@@ -201,7 +212,9 @@ def download(url: str, cookie_file: str | None = None, *, auto_cookies=True, bro
             if platform.key == "douyin" and urlparse(url).hostname == "v.douyin.com":
                 emit("stage", message="正在展开抖音分享短链接…")
                 try:
-                    with ydl.urlopen(url) as response:
+                    # Domestic share redirects use the same route as Douyin's
+                    # photo endpoints; explicit proxy preferences still win.
+                    with ydl.urlopen(yt_dlp.networking.Request(url, proxies=gallery_proxies())) as response:
                         url, _ = resolve_link(response.url)
                 except Exception as exc:
                     raise ValueError("抖音分享短链接未能展开，请点「网页登录」打开链接、完成验证后重试，或粘贴完整视频网址。") from exc
@@ -232,17 +245,24 @@ def download(url: str, cookie_file: str | None = None, *, auto_cookies=True, bro
             raise ValueError("无法获取完整时长，请检查视频链接或重新扫描浏览器登录状态。")
         if info.get("is_live"):
             raise ValueError("当前仅支持已经发布的完整视频，暂不支持直播。")
-        quarantine_incomplete(info, ydl, expected)
+        quarantine_incomplete(info, ydl, expected, OUTPUT)
         emit("metadata", title=info.get("title"), duration=expected,
              height=info.get("height"), formats=[{
                  "id": f.get("format_id"), "height": f.get("height"), "abr": f.get("abr"),
                  "vcodec": f.get("vcodec"), "acodec": f.get("acodec")
              } for f in info.get("requested_formats", [])])
         # Reuse the resolved metadata so selection and the downloaded media are identical.
-        ydl.process_info(info)
+        existing = next((candidate for candidate in media_candidates(OUTPUT / Path(ydl.prepare_filename(info)).name)
+                         if candidate.is_file()), None)
+        if existing:
+            # The preflight above has already verified this exact format's file.
+            path = existing
+            emit("log", message="已找到同画质、同音质的完整文件，正在复用并重新校验。")
+        else:
+            ydl.process_info(info)
         candidates = [info.get("filepath"), *reversed(final_paths), ydl.prepare_filename(info)]
-        path = next((Path(p) for p in candidates if p and Path(p).is_file()
-                     and Path(p).suffix.lower() in {".mp4", ".mkv", ".webm", ".flv"}), None)
+        path = existing or next((Path(p) for p in candidates if p and Path(p).is_file()
+                                and Path(p).suffix.lower() in {".mp4", ".mkv", ".webm", ".flv"}), None)
         if path is None:
             path = next((candidate for candidate in media_candidates(ydl.prepare_filename(info))
                          if candidate.is_file()), None)
@@ -250,11 +270,22 @@ def download(url: str, cookie_file: str | None = None, *, auto_cookies=True, bro
             raise ValueError("未找到合并后的视频文件，请查看详细日志。")
     emit("stage", message="正在检查视频、音频和完整时长…")
     result = verify_media(path, expected)
+    final = OUTPUT / path.name
+    if path.resolve() != final.resolve():
+        path.replace(final)  # Same-volume publication happens only after verification.
+        path = final
+        result["path"] = str(final.resolve())
     result.update(title=info.get("title"), expected_duration=expected,
-                  platform=platform.key, selected_formats=[f.get("format_id") for f in info.get("requested_formats", [])]
+                  platform=platform.key, source_key=source_key, selected_formats=[f.get("format_id") for f in info.get("requested_formats", [])]
                   or [info.get("format_id")])
     receipt = path.with_suffix(path.suffix + ".info.json")
-    receipt.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+    pending_receipt = receipt.with_suffix(receipt.suffix + ".tmp")
+    pending_receipt.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+    pending_receipt.replace(receipt)
+    try:
+        temporary.rmdir()
+    except OSError:
+        pass
     emit("complete", **result)
     return result
 

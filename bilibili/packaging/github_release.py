@@ -90,7 +90,7 @@ def main():
         release_dir = ROOT / "release"
         tag = "v" + APP_VERSION
         response = client.get(f"https://api.github.com/repos/{REPOSITORY}/releases/tags/{tag}", timeout=20)
-        instructions = release_dir / "使用说明.md"
+        instructions = release_dir / "RELEASE_NOTES.md"
         if instructions.is_file():
             body = instructions.read_text(encoding="utf-8")
         else:
@@ -106,7 +106,7 @@ def main():
         else:
             raise RuntimeError(f"Cannot inspect release: HTTP {response.status_code}")
         assets = {asset["name"]: asset for asset in release.get("assets", [])}
-        names = ("VideoDownloader-Windows-Setup.exe", "VideoDownloader-Android.apk", "SHA256SUMS.txt", "update.json")
+        names = ("VideoDownloader-Windows-Setup.exe", "VideoDownloader-Android.apk", "VideoDownloader-Source.zip", "SHA256SUMS.txt", "update.json")
         for name in names:
             path = release_dir / name
             with path.open("rb") as stream:
@@ -130,16 +130,8 @@ def main():
         published = api(client, "PATCH", f"/repos/{REPOSITORY}/releases/{release['id']}",
                         json={"draft": False, "make_latest": "true", "body": body})
         print(json.dumps({"published": True, "url": published["html_url"]}), flush=True)
-        # The application repository keeps a single current download release.
-        releases = api(client, "GET", f"/repos/{REPOSITORY}/releases?per_page=100")
-        import re
-        current = tuple(map(int, APP_VERSION.split(".")))
-        for previous in releases:
-            match = re.fullmatch(r"v(\d+)\.(\d+)\.(\d+)", previous.get("tag_name", ""))
-            if (previous["id"] != published["id"] and previous.get("name", "").startswith("视频下载器 ")
-                    and match and tuple(map(int, match.groups())) < current):
-                api(client, "DELETE", f"/repos/{REPOSITORY}/releases/{previous['id']}")
-                print(json.dumps({"removed_old_release": previous["tag_name"]}), flush=True)
+        # Preserve previous formal releases for recovery. Test fixtures never
+        # create, replace or remove published resources.
 
 
 if __name__ == "__main__":

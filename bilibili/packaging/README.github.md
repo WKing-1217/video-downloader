@@ -1,41 +1,39 @@
 # 视频下载器
 
-Qt 图形界面，粘贴链接即可自动识别 Bilibili、抖音和 X，保存当前权限下最高可用画质与音质。支持抖音图文、实况和背景配乐。
+Windows v2.0 使用原生 Qt 三页界面：粘贴即下载、下载即入库、点击卡片即可本地预览。自动识别 Bilibili、抖音和 X，保留当前权限下最高可用画质与音质，支持抖音图文、实况及配乐。
 
 ## 下载
 
-- [Windows 安装包](https://github.com/WKing-1217/video-downloader/releases/latest/download/VideoDownloader-Windows-Setup.exe)：Windows 10 / 11 x64。
-- [Android APK](https://github.com/WKing-1217/video-downloader/releases/latest/download/VideoDownloader-Android.apk)：Android 10+，ARM64 / x86_64。
+- [Windows 安装包](https://github.com/WKing-1217/video-downloader/releases/latest/download/VideoDownloader-Windows-Setup.exe)：Windows 10 / 11 x64，内置运行环境、FFmpeg、播放与网页登录组件。
+- [Android APK](https://github.com/WKing-1217/video-downloader/releases/latest/download/VideoDownloader-Android.apk)：Android 10+，ARM64 / x86_64，本次保持 v1.0.4。
 - [最新版本与更新说明](https://github.com/WKing-1217/video-downloader/releases/latest)。
 
-安装包内置运行环境和 FFmpeg，无需配置命令行。旧版安装到原目录即可升级。下载页使用固定文件名，仅保留最新安装包。
+安装到原目录即可升级，无需卸载。Windows 与 Android 分别记录实际版本，固定安装包文件名；历史正式 Release 保留供恢复。
 
 ![Windows 界面](docs/desktop.png)
 
 ## 使用
 
-粘贴视频链接或整段分享文字，点击“开始下载”。Windows 自动读取本机浏览器可用的站点登录状态，账号权限不足时也可在应用内网页登录；Android 使用应用内网页登录。完成后可以播放或打开文件夹。
+在下载页输入框 Ctrl+V、右键粘贴或点击粘贴，自动验证、排队并下载；手动输入可按回车。不会监听整个系统剪贴板。重复粘贴不会重复创建任务。
 
-视频、音频与完整时长通过检查后才显示完成。使用最多 8 连接及 B 站同格式备用节点，保持原画质、音质，支持断点检查；损坏的旧成品会单独保留并重新下载。
+“我的视频”自动导入原保存目录，显示缩略图、时长、大小与完成时间；支持搜索、排序、内置播放和明确区分的记录/文件删除。底部可以打开或修改后续保存目录，旧视频保持原位置。
+
+登录、浏览器账号扫描、登录来源、更新偏好与日志在右上角设置内。浏览器信息受加密保护时会显示真实状态，可使用程序内网页登录。不同站点账号不会混用，登录值不写进日志或视频记录。
 
 ## 更新
 
-两端启动时自动检查 GitHub 新版本，“更多选项”中可关闭。也可点击“检查更新”。Windows 下载更新后检查文件大小和 SHA-256，用户点击后启动原目录升级；进行视频下载时不会安装更新。Android 发现新版后打开 GitHub APK 下载链接，由系统确认安装。
+启动后台读取实际 GitHub Releases。无更新不打扰；发现新版可暂不更新，或者进入“软件更新”查看真实说明与下载进度。支持四连接、可靠范围续传、有限重试、取消和 SHA-256 校验；未知大小使用不确定进度。
 
-Windows 当前版本与更新入口固定在标题行右上角，发现新版时显示带版本号的粉色按钮；展开选项或滚动页面时仍然可见。
+点击安装并确认后，独立助手备份原程序与设置，退出旧程序、执行安装并验证新版启动；失败时恢复。视频与网页登录资料保留。网络不可用不影响下载页，可重试或打开官方 Releases，不使用未知第三方加速源。
 
-更新检查只请求公开发布信息，不使用视频网站登录资料。网络不可用时不会打断视频下载。
+## 源码、构建与验证
 
-## 源码与构建
+- [桌面使用和构建说明](bilibili/README.md)
+- [v2 修改清单、20 条验收与实际边界](bilibili/V2_DELIVERY.md)
+- [Android 构建说明](android/README.md)
+- [第三方组件许可](bilibili/packaging/THIRD_PARTY.txt)
 
-- `bilibili/`：Qt Widgets / PySide6 桌面界面、下载核心和测试。
-- `android/`：Qt Quick / C++ 界面、Android 前台下载服务。
-- `bilibili/version.json`：版本号、Android 版本代码及发布仓库。
-- `bilibili/packaging/`：Windows 打包、发布与第三方许可。
+桌面推荐标准 CPython 3.12 x64，安装 bilibili/requirements.txt、PyInstaller，准备 FFmpeg 与 Inno Setup 6 后执行 bilibili/packaging/build_windows.ps1。版本与发布仓库在 bilibili/version.json。
 
-开发环境需要 Python 3.11+。桌面安装 `bilibili/requirements.txt` 及 PyInstaller，准备 FFmpeg、Inno Setup，再执行 `bilibili/packaging/build_windows.ps1`。Android 构建要求见 [Android 构建说明](android/README.md)。运行 `package_release.py` 整理最新产物、生成更新清单，再运行 `github_release.py publish` 发布到 GitHub。发布者认证通过本机 Git Credential Manager 完成。
-
-检查命令：`python bilibili/smoke_test.py`、`python bilibili/test_parallel_http.py`、`python bilibili/test_updates.py`。真实安装包与联网验证记录见 [验证说明](docs/validation.md)。
-
-第三方组件保留各自许可，完整文本和说明见 [第三方组件](bilibili/packaging/THIRD_PARTY.txt)。
+本次真实独立 EXE 下载样例：4 分 55 秒、1080p AV1＋AAC，从粘贴到入库并解码播放约 27 秒；已实际验证 v1.0.4 副本覆盖安装、重新启动与数据保留。82 项单元/HTTP 检查及 Qt 交互检查分别记录，不以模拟数据冒充真实下载。Windows 10 实机、双屏热切换和长期大规模媒体库压力测试尚未覆盖。
 

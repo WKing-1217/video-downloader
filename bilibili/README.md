@@ -1,109 +1,61 @@
-# 视频下载器
+# 视频下载器 Windows v2.0
 
-## Windows 安装版与安卓 APK
+原生 Qt / PySide6 桌面应用，支持 Bilibili、抖音、X。自动选择当前权限下最高可用画质与音质，完成检查后入库；保留抖音图文、实况与配乐。Android 客户端本次保持 v1.0.4。
 
-正式安装文件位于项目根目录的 `release`：Windows 安装包 `VideoDownloader-Windows-Setup.exe` 和安卓安装包 `VideoDownloader-Android.apk`。Windows 版是 Qt / PySide6 图形界面，已内置运行环境、下载服务、FFmpeg 与网页登录组件；安装后从桌面或开始菜单打开，不需要运行命令或安装 Python。支持 Windows 10 / 11 x64。
+## 安装和使用
 
-安卓主界面使用 Qt Quick / C++，支持 Android 10 及以上的 ARM64 手机及 x86_64。下载在前台服务运行，保存到系统下载目录，支持应用内网页登录、作品文件查看及系统分享。手机不会读取其他应用的登录账号。安卓源码及构建说明位于同级 `android` 文件夹。
+Windows 10 / 11 x64 双击项目根目录 `release/VideoDownloader-Windows-Setup.exe`，安装到原目录即可升级。安装包内含运行环境、FFmpeg、Qt 播放和网页登录组件，无需安装 Python。
 
-Windows 安装版默认保存到用户“视频 / 视频下载器 / video”，可点“更改位置”。下文启动脚本用于开发环境，源码运行时仍默认保存到本项目同级 `video`。
+三个页面：
 
-双击 **启动下载器.bat**，粘贴视频链接或整段分享文字，再点 **开始下载**。
-程序在后台自动识别 **Bilibili、抖音、X（Twitter）**，不需要手动选平台。主界面只保留“视频链接”和“链接粘贴处”。
-视频自动保存在与本文件夹同级的 `video` 文件夹。界面可查看进度、取消下载、播放结果和打开保存文件夹。
-抖音图文 / 实况作品也可粘贴同一个输入框，程序会在 `video` 下建立作品文件夹，保存全部图片、实况 MP4 及可获取的背景音乐。
+- **下载**：在输入框 Ctrl+V、右键粘贴或点击粘贴，立即验证并排队下载。手动输入可按回车。不会监听系统剪贴板；重复链接不会重复创建任务。
+- **我的视频**：自动扫描原保存目录，显示缩略图、时长、大小与完成时间。支持搜索、排序和内置播放。删除记录保留文件；删除本地文件需要确认。
+- **软件更新**：后台检查真实 GitHub Releases。无新版保持安静，发现新版可暂不更新或进入第三页下载；显示真实字节、速度与剩余时间。安装前确认退出，由独立助手安装、验证启动并在失败时恢复。
 
-## 自动读取电脑上的登录状态
+右上角设置保留浏览器登录扫描、登录来源、网页登录、更新偏好与诊断日志。浏览器加密保护或文件占用时如实显示，可使用程序内网页登录。登录信息按站点隔离，不写入视频信息或日志。
 
-打开程序会扫描当前 Windows 用户的 Chrome、Edge、Firefox、Brave、Chromium、Vivaldi、Opera 标准配置目录；下载时按视频平台重新读取，优先选择包含该平台登录信息的配置。
+视频库底部可打开或更改保存位置。修改只影响后续任务，旧目录仍纳入库，不自动移动文件。默认位置为用户“视频 / 视频下载器 / video”；源码运行默认使用项目同级 video，已有设置优先。
 
-- **扫描登录状态**：重新扫描电脑上可读取的网页访问与登录信息，不需要选择 Cookie 文件。
-- **更多选项**：可查看各浏览器结果，或指定一个浏览器配置。也可以取消自动读取。
-- **网页登录**：先粘贴视频链接，再点此按钮，会打开对应平台的网页。按网站提示登录或完成验证，然后返回下载器重新下载。程序会在自己的浏览器配置中保留登录状态。
+## 数据和更新安全
 
-Windows 上的新版本 Chrome / Edge 可能使用应用绑定加密，或者正在占用登录数据库。**找到浏览器配置不等于成功读取账号**。程序会显示“加密保护”“无法打开”等真实状态；这种情况下可以使用“网页登录”，也可以在 Firefox 登录后重新扫描。扫描发现登录信息后，其是否仍然有效由网站在下载时确认。
+`%LOCALAPPDATA%/LocalVideoDownloader` 保存设置、SQLite 视频库、WebProfile、缩略图和更新状态，安装目录仅包含程序。原 settings.json、下载路径与网页登录配置继续使用。临时下载在保存目录的 .downloads 内，完整性检查通过后才发布为成品。
 
-扫描使用只读数据库连接，仅查询这三个平台的域名。不同浏览器账号不会合并；读取出的 Cookie 不写入日志或视频信息文件。程序内网页登录状态通过子进程的标准输入传递，不出现在命令行参数中。网页登录资料保存在本机 `%LOCALAPPDATA%\LocalVideoDownloader\WebProfile`。
+媒体下载保留最多 8 连接、B 站同格式备用节点、可靠断点检查、音画分别选优及 FFmpeg 无损合并。时长或音轨不完整会报错，损坏旧成品保留到“未通过校验”。
 
-## 画质、音质和完整性
+更新从 `version.json` 的实际仓库读取正式 Release Notes，只使用官方 GitHub 地址。安装包采用最多 4 连接、经验证的范围续传、有限重试及真实进度；没有总大小时使用不确定进度。可取得时校验 SHA-256。独立助手备份程序、设置与库，在确认旧程序退出后安装；启动失败可恢复原版。视频和登录资料不放进运行库备份或清理范围。
 
-- 使用 Qt for Python（PySide6）界面和 yt-dlp 下载引擎，自动选择当前访问权限下最好的视频流与音频流，再由 FFmpeg 合并。
-- 保留源编码，不通过重新编码放大分辨率或虚增音频码率。
-- 抖音同一个视频的高清版本可能带有较低码率音频。程序会比较不同编码版本的真实音轨，必要时分别提取最好的画面与音频，再无损合并。
-- 完成前用 ffprobe 检查画面、声音与视频总时长；检查通过后才显示下载完成。支持断点续传。
-- HTTP 视频及音轨默认最多使用 8 个连接，逐段检查响应范围和字节数；B 站节点异常时切换源站提供的同格式备用节点，不支持时自动使用兼容下载。分段流使用 8 路原生并发。断点文件按顺序写入，切换节点会检查已有前缀，不写入空洞或乱序内容。
-- 重试前会检查已有成品，损坏或时长不足的旧文件保留到同目录“未通过校验”文件夹，并重新下载，避免反复复用同一个坏文件。
-- 需要登录或大会员权限的清晰度，使用已读取的浏览器登录信息，或点击“网页登录”登录自己的账号。
-- 每个结果旁的 `.info.json` 文件记录选用格式、时长、分辨率和文件大小。
-- 文件名包含视频 ID 和格式组合，不同画质、音质分别保存，避免登录后获取到更高质量时误用已有的低质量文件。
-- 下载进程会自动继承已启用的 Windows 系统代理，也保留显式网络代理环境变量的优先级。
-- 抖音图文及配乐使用本机直连，避免自动系统代理的海外出口造成音乐地区不可用；显式代理环境变量仍优先。普通视频继续使用原有网络设置。
-- 图文与实况按源站顺序保存原文件，逐项检查尺寸、时长、文件大小并完整解码。实况原片可能无声，作品配乐单独保存；不会把静态图片冒充完整视频。作品文件夹内的 `作品信息.json` 记录全部文件及校验结果。
+## 开发与构建
 
-## 验证结果与边界
-
-链接：<https://www.bilibili.com/video/BV1yUFPzKEC7>
-
-已实际下载完整视频：**294.785 秒（约 4 分 55 秒）**，**1920 × 1080**，AV1 视频和 AAC 音频（约 169 kb/s），文件约 36.5 MiB。选用格式为 `100026+30280`。
-
-这是本次未登录访问时实际可获取的最高画质、音质。标题中的“4K”“无损”不代表服务器向当前会话提供该格式。实际文件已经过 FFmpeg 全片解码检查，未发现解码错误。
-
-新增功能已通过三平台链接识别、短链接与分享文字解析、账号选择、过期信息过滤、平台隔离、系统代理、抖音视频 ID 精确匹配与音频选择检查。
-
-本机实际扫描到 9 个 Chrome / Edge 配置，当前没有成功读取到可用账号：Chrome 中相关信息受加密保护，Edge 登录数据库无法打开。网页登录组件已实际打开 B 站网页，但未代替用户完成账号登录。
-
-### 大人提供的抖音和 X 样例
-
-| 平台 | 视频 | 实际结果 |
-| --- | --- | --- |
-| X | `satireorcry1/status/2111053955174117633` | 55.36 秒，1080 × 1920，H.264 视频与 AAC 音频，完整下载并通过全片解码检查 |
-| 抖音 | `v.douyin.com/TzUaumC1HAA/` → `7696033724873642162` | 约 103.12 秒，720 × 960，HEVC 视频与约 128 kb/s AAC 音频，完整下载并通过全片解码检查 |
-
-抖音样例的 HEVC 版本原配音频约 48 kb/s，AVC 版本约 128 kb/s。成品保留 HEVC 高清画面，合并 AVC 版本的高码率音轨，实际测得音频平均约 128 kb/s，没有重新编码。
-
-### 图文 / 实况链接报错修复
-
-`https://v.douyin.com/23O-7ujOLcw/` 实际跳转到 `/note/7547315780212772138`，旧版只识别 `/video/`，因此报 `Unsupported URL`。现已支持 `/note/`、`/slides/` 及其分享链接，使用平台分享页的图文详情接口，并严格匹配作品 ID。
-
-该作品已通过真实 Qt 下载流程：3 张图片（两张 2160 × 2880、一张 1440 × 1920）、1 段 720 × 960 的实况视频（1.879 秒）和 284.64 秒 AAC 配乐（约 128 kb/s），合计约 5.5 MiB；5 个媒体文件全部通过完整解码。图文完成后按钮显示“查看作品文件夹”。
-
-普通抖音视频回归时，该样例的公开接口当前只返回 576 × 768 播放流；之前验收的 720 × 960 文件仍保留。画质按本次服务器实际提供的格式选择，音频仍选择约 128 kb/s 的完整音轨。
-
-本机 X 超时由 `NODE_USE_ENV_PROXY` 被 Python 当作代理配置、遮蔽 Windows 系统代理导致，已修复。抖音网页详情接口失败时，新增移动端公开数据兼容解析，只接受视频 ID 完全匹配的数据，未匹配时回退原有网页引擎。解析只连接平台自己的接口，没有使用第三方解析服务。
-
-网站接口变化、账号权限或网站验证仍可能影响其他视频。需要验证时可点“网页登录”打开对应视频，完成网站提示后重试；X 需要本机可用的网络或系统代理。
-
-## 安装与维护
-
-当前电脑的运行环境已经安装。若迁移到其他 Windows 电脑，需要 Python 3.10 或更新版本、FFmpeg（含 ffprobe），然后双击 **安装依赖.bat**。
-
-FFmpeg 可用 `winget install --id Gyan.FFmpeg --exact` 安装，安装后重新打开终端。
-如网站更新后无法解析，重新运行 **安装依赖.bat** 可更新 yt-dlp。
-
-也可在本文件夹终端启动：
+推荐标准 CPython 3.12 x64，避免将 Anaconda 或其他工具的 Qt DLL 混进打包环境。
 
 ```powershell
-.\.venv\Scripts\python.exe app.py
-.\.venv\Scripts\python.exe downloader.py "https://www.bilibili.com/video/BV1yUFPzKEC7"
+python -m venv bilibili/.venv
+bilibili/.venv/Scripts/python.exe -m pip install -r bilibili/requirements.txt pyinstaller
+bilibili/.venv/Scripts/pythonw.exe bilibili/app.py
 ```
 
-本机验收命令：`.\.venv\Scripts\python.exe smoke_test.py --ui`。它会运行 32 项自动检查，再通过 Qt 界面的真实子进程运行 B 站样例下载（已有相同格式的完整文件会复用并检查），生成 `ui-smoke-bilibili-result.json` 和界面截图。`test_parallel_http.py` 另有 11 项检查，覆盖实际 HTTP 并发、续传、损坏前缀、错误范围、截断、备用节点、兼容回退与完整内容一致性。`--ui --web-session` 额外检查网页登录状态的标准输入传递路径（使用合成访客信息，不代表账号登录成功）。`web_login_smoke.py` 检查网页登录组件与 Cookie 事件。
+准备 FFmpeg / ffprobe 和 Inno Setup 6，再运行 `bilibili/packaging/build_windows.ps1`。独立程序在 `bilibili/dist/v2/VideoDownloader`，初始安装包在 `release/v2.0.0`。版本、Android 独立版本及实际发布仓库在 `bilibili/version.json`。
 
-其他平台可以传入 `--url "视频链接" --duration 秒数 --min-width 宽度 --min-height 高度 --min-audio-bitrate 音频码率`，运行同样的 Qt 实际下载流程，输出对应平台的检查记录与截图。
+测试命令、修改清单、真实下载/安装验收和未覆盖场景见 [v2 交付记录](V2_DELIVERY.md)。图形测试的受控媒体先用 `python bilibili/qa/prepare_fixture.py` 生成，不使用正式 GitHub 发布做测试。
 
-生日图文样例验收：`.\.venv\Scripts\python.exe smoke_test.py --ui --gallery --url "https://v.douyin.com/23O-7ujOLcw/"`，生成 `ui-smoke-douyin-gallery-result.json` 与截图。
+```powershell
+python bilibili/smoke_test.py
+python -m unittest discover -s bilibili -p 'test*.py' -v
+python bilibili/qa/functional_probe.py
+python bilibili/qa/update_ui_probe.py
+python bilibili/qa/player_probe.py
+```
 
-只扫描浏览器：`.\.venv\Scripts\python.exe downloader.py --scan-browsers`。
+`smoke_test.py --ui` 会在隔离目录真实联网下载并检查入库；`--gallery --url 分享链接` 检查抖音图文。独立打包验收使用 `qa/packaged_probe.py`，清除外部 Python/FFmpeg PATH 后实际下载、入库和播放。
 
-支持 bilibili.com / b23.tv、douyin.com / v.douyin.com / m.douyin.com / iesdouyin.com、x.com / twitter.com / t.co 链接及其分享文字。下载当前视频分 P，不自动下载整个合集。X 多视频帖子默认下载第一个，带 `/video/2` 等序号的链接可指定视频。支持普通完整视频、抖音图文及实况作品，暂不支持直播。请下载自己有权保存的内容。
+发布时先完成验收，编辑 `release/RELEASE_NOTES.md`，运行 `packaging/package_release.py` 验证两端实际版本、整理固定文件名和生成更新清单；`github_release.py publish` 创建正式版本。旧正式 Release 保留供恢复，测试不会删除它们。
 
-参考：[Qt for Python](https://doc.qt.io/qtforpython-6/gettingstarted.html)、[yt-dlp 格式选择](https://github.com/yt-dlp/yt-dlp#format-selection)、[浏览器登录读取](https://github.com/yt-dlp/yt-dlp#authentication-options)、[Windows Cookie 解密限制](https://github.com/yt-dlp/yt-dlp/issues/10927)、[抖音移动端数据接口参考](https://github.com/ucmao/media-parser/blob/main/docs/parsers/douyin.md)。
+## 实际验证与边界
 
+B 站样例 BV1yUFPzKEC7 在独立 EXE 里实测：294.785 秒、1920×1080、AV1＋169 kb/s AAC、38298986 字节；本机从粘贴到入库并解码播放约 27 秒。生日图文短链接 23O-7ujOLcw 实测保存 3 张图片、1 段实况与配乐，全部逐项完整解码。
 
-## 自动检查更新
+画质按源站实际提供与用户账号权限选择，标题“4K”或“无损”不代表服务器提供相应流。支持当前视频分 P、指定 X 帖子的视频序号，不自动下载整个合集，暂不支持直播。网站验证、受保护的浏览器登录数据及网络线路会影响访问；失败时保留输入、给出原因和重试/网页登录入口。
 
-两端启动时从 GitHub Release 检查新版本，也可点击“检查更新”。Windows 校验安装包大小及 SHA-256 后，由用户点击安装；安装到原目录，视频下载期间禁止升级。Android 发现新版后打开 GitHub APK 下载链接，由系统确认覆盖安装。更多选项中可关闭启动检查。更新请求不使用视频网站登录信息。
+本次在 Windows 11 x64 验证，另做 100% / 150% / 200% Qt 离屏检查；Windows 10 实机、双屏热切换和长期大规模库压力测试尚未覆盖。X 与普通抖音保留原下载内核，本次真实回归范围见交付记录。
 
-Windows 当前版本和更新按钮固定在右上角标题行，滚动页面时仍然可见；发现新版时按钮会突出显示完整的新版本号。
-
-项目：https://github.com/WKing-1217/video-downloader
+项目：[WKing-1217/video-downloader](https://github.com/WKing-1217/video-downloader)。第三方许可见 [THIRD_PARTY.txt](packaging/THIRD_PARTY.txt)。

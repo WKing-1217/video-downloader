@@ -10,17 +10,23 @@ APP_DIR = Path(sys.executable).resolve().parent if FROZEN else SOURCE
 SETTINGS = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "LocalVideoDownloader/settings.json"
 
 
+def data_dir():
+    folder = SETTINGS.parent
+    folder.mkdir(parents=True, exist_ok=True)
+    return folder
+
+
 def output_dir():
     override = os.environ.get("VIDEO_DOWNLOADER_OUTPUT")
     if override:
         return Path(override).resolve()
+    try:
+        saved = json.loads(SETTINGS.read_text(encoding="utf-8")).get("output")
+        if saved:
+            return Path(saved).resolve()
+    except (OSError, ValueError, AttributeError):
+        pass
     if FROZEN:
-        try:
-            saved = json.loads(SETTINGS.read_text(encoding="utf-8")).get("output")
-            if saved:
-                return Path(saved).resolve()
-        except (OSError, ValueError):
-            pass
         return Path.home() / "Videos/视频下载器/video"
     return SOURCE.parent / "video"
 

@@ -13,7 +13,7 @@ engine.mkdir(parents=True, exist_ok=True)
 identity = json.loads((source / "version.json").read_text(encoding="utf-8"))
 java_version = root / "package/src/com/localvideodownloader/app/AppVersion.java"
 java_version.write_text('package com.localvideodownloader.app;\npublic final class AppVersion {\n'
-                       + '  public static final String VERSION = ' + json.dumps(identity['version']) + ';\n'
+                       + '  public static final String VERSION = ' + json.dumps(identity.get('android_version', identity['version'])) + ';\n'
                        + '  public static final String REPOSITORY = ' + json.dumps(identity['repository']) + ';\n'
                        + '  public static final String UPDATE_URL = "https://github.com/" + REPOSITORY + "/releases/latest/download/update.json";\n}\n', encoding="utf-8")
 modules = ["downloader.py", "platform_links.py", "douyin_adapter.py", "douyin_gallery.py",
