@@ -71,7 +71,7 @@ def main():
             raise RuntimeError("APK is missing the latest shared download engine")
     shutil.copy2(built_apk, android)
     base = f"https://github.com/{REPOSITORY}/releases/download/v{APP_VERSION}/"
-    notes = "加入 GitHub 自动检查更新与手动更新入口；发布目录仅保留最新版；保留完整音画、并发下载和 B 站备用节点切换。"
+    notes = "修复滚轮误切换登录来源，更新下拉箭头；加入 GitHub 自动检查更新；发布目录仅保留最新版，保留完整音画与并发下载。"
     manifest = {"schema": 1, "product": "LocalVideoDownloader", "notes": notes, "platforms": {}}
     for platform, path in (("windows", windows), ("android", android)):
         manifest["platforms"][platform] = {"version": APP_VERSION, "url": base + path.name,

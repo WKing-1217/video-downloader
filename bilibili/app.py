@@ -27,6 +27,21 @@ def clock(seconds):
     return f"{seconds // 60:02d}:{seconds % 60:02d}"
 
 
+class LoginSourceComboBox(QComboBox):
+    """Keep page scrolling from accidentally changing the selected account."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFocusPolicy(Qt.StrongFocus)
+        self.setAccessibleName("登录来源")
+
+    def wheelEvent(self, event):
+        if self.view().isVisible():
+            super().wheelEvent(event)
+        else:
+            event.ignore()
+
+
 class DownloadWindow(QMainWindow):
     def __init__(self, *, auto_scan=True, restore_web_login=True, check_updates=None):
         super().__init__()
@@ -148,7 +163,7 @@ class DownloadWindow(QMainWindow):
         extra.addWidget(self.auto_login)
         source_row = QHBoxLayout()
         source_row.addWidget(QLabel("登录来源"))
-        self.source_select = QComboBox()
+        self.source_select = LoginSourceComboBox()
         self.source_select.addItem("自动选择已登录的浏览器", "")
         self.source_select.currentIndexChanged.connect(self.render_account_status)
         source_row.addWidget(self.source_select, 1)
@@ -186,6 +201,14 @@ class DownloadWindow(QMainWindow):
             QLineEdit, QPlainTextEdit, QComboBox {background: white; border: 1px solid %(border)s;
                 border-radius: 8px; padding: 12px; selection-background-color: %(accent)s;}
             QLineEdit:focus {border: 2px solid %(accent)s; padding: 11px;}
+            QComboBox {padding-right: 48px;}
+            QComboBox:focus {border-color: %(accent)s;}
+            QComboBox::drop-down {subcontrol-origin: padding; subcontrol-position: top right;
+                width: 44px; border: none; border-top-right-radius: 8px; border-bottom-right-radius: 8px;}
+            QComboBox::drop-down:hover {background: #eef0f6;}
+            QComboBox::down-arrow {image: url("%(chevron)s"); width: 18px; height: 18px;}
+            QComboBox QAbstractItemView {background: %(surface)s; border: 1px solid %(border)s;
+                selection-background-color: %(accent)s; selection-color: white; outline: none;}
             QPushButton {background: white; border: 1px solid %(border)s; border-radius: 8px;
                 padding: 12px 18px; min-height: 22px;}
             QPushButton:hover {background: #eef0f6;}
@@ -198,7 +221,7 @@ class DownloadWindow(QMainWindow):
             QProgressBar {background: #e4e7ee; border: none; border-radius: 5px; height: 10px; max-height: 10px;}
             QProgressBar::chunk {background: %(accent)s; border-radius: 5px;}
             QCheckBox {spacing: 8px; font-size: 15px; color: %(muted)s;}
-        """ % TOKENS)
+        """ % {**TOKENS, "chevron": (ROOT / "assets/chevron-down.svg").as_posix()})
         for label in self.findChildren(QLabel):
             label.setTextFormat(Qt.PlainText)
         if auto_scan:
