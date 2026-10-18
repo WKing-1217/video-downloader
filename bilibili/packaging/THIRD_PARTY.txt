@@ -1,0 +1,26 @@
+Video Downloader / 视频下载器 1.0.0
+
+This application includes open-source components. Their respective licenses
+remain applicable. Application source is provided alongside the installer.
+
+Qt for Python / PySide6 / Qt: LGPL-3.0, GPL-3.0 and applicable component licenses.
+https://www.qt.io/licensing/open-source-lgpl-obligations
+https://code.qt.io/pyside/pyside-setup
+The dynamically linked Qt libraries may be replaced with compatible versions.
+
+yt-dlp: Unlicense (individual bundled dependencies retain their own licenses).
+https://github.com/yt-dlp/yt-dlp
+
+FFmpeg (Windows build from Gyan, GPL build): GPL-3.0-or-later.
+https://www.ffmpeg.org/legal.html
+https://www.gyan.dev/ffmpeg/builds/
+
+PyInstaller bootloader: GPL-2.0-or-later with the bootloader exception.
+https://pyinstaller.org/en/stable/license.html
+
+Android youtubedl-android / FFmpeg runtime: GPL-3.0.
+https://github.com/yausername/youtubedl-android
+
+Full runtime notices and the FFmpeg build configuration are included in
+the source distribution's packaging/licenses directory when available.
+Downloads use the user's access permissions on the selected platform.

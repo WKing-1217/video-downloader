@@ -1,0 +1,6 @@
+build/
+signing/
+package/assets/engine/
+package/libs/*.aar
+__pycache__/
+preview-android.png

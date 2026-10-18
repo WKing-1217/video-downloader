@@ -1,0 +1,62 @@
+buildscript {
+    repositories { maven { url 'https://maven.aliyun.com/repository/google' }; google(); mavenCentral() }
+    dependencies { classpath 'com.android.tools.build:gradle:9.0.0' }
+}
+repositories { maven { url 'https://maven.aliyun.com/repository/google' }; google(); mavenCentral() }
+apply plugin: qtGradlePluginType
+dependencies {
+    implementation fileTree(dir:'libs',include:['*.jar','*.aar'])
+    implementation 'androidx.core:core:1.17.0'
+    implementation 'io.github.junkfood02.youtubedl-android:library:0.18.1'
+    // FFmpeg AAR is fetched once by the build preparation script into libs/.
+    // It shares common/commons-io dependencies with the Python runtime above.
+}
+android {
+    namespace=androidPackageName
+    compileSdkVersion androidCompileSdkVersion
+    buildToolsVersion androidBuildToolsVersion
+    ndkVersion=androidNdkVersion
+    sourceSets.main {
+        manifest.srcFile 'AndroidManifest.xml'
+        java.srcDirs=[qtAndroidDir+'/src','src','java']
+        res.srcDirs=[qtAndroidDir+'/res','res']
+        resources.srcDirs=['resources']
+        assets.srcDirs=['assets']
+        jniLibs.srcDirs=['libs']
+    }
+    compileOptions {sourceCompatibility JavaVersion.VERSION_17;targetCompatibility JavaVersion.VERSION_17}
+    packagingOptions {jniLibs {
+        useLegacyPackaging=true
+        excludes += ['**/armeabi-v7a/**','**/x86/**']
+        keepDebugSymbols += ['**/libffmpeg.zip.so','**/libpython.zip.so']
+    }}
+    defaultConfig {
+        minSdkVersion qtMinSdkVersion
+        targetSdkVersion qtTargetSdkVersion
+        ndk.abiFilters=qtTargetAbiList.split(',')
+    }
+    def signingFile=file(System.getenv('VIDEO_DOWNLOADER_SIGNING') ?: 'signing.properties')
+    if(signingFile.exists()) {
+        def keys=new Properties();signingFile.withInputStream {keys.load(it)}
+        signingConfigs { release {storeFile=file(keys['storeFile']);storePassword=keys['storePassword'];keyAlias=keys['keyAlias'];keyPassword=keys['keyPassword']} }
+        buildTypes.release.signingConfig=signingConfigs.release
+    }
+    lint {abortOnError=false}
+}
+
+// androiddeployqt looks for its conventional "-unsigned.apk" name even when
+// Gradle has already signed the release. Give its copy step an identical alias;
+// the canonical release APK remains signed and is verified before delivery.
+tasks.configureEach { buildTask ->
+    if (buildTask.name == 'assembleRelease') buildTask.doLast {
+        def outputDir=layout.buildDirectory.dir('outputs/apk/release').get().asFile
+        def signedApk=new File(outputDir,project.name+'-release.apk')
+        if(signedApk.exists()) {
+            copy {
+                from signedApk
+                into outputDir
+                rename {project.name+'-release-unsigned.apk'}
+            }
+        }
+    }
+}

@@ -1,0 +1,15 @@
+.venv/
+build/
+dist/
+__pycache__/
+*.log
+*.reference.txt
+*-result.json
+*-acceptance.json
+preview*.png
+packaged-qt-*.json
+packaged-qt-*.png
+installed-qt-*.json
+installed-qt-*.png
+android-device-*.png
+android-final-*.png
