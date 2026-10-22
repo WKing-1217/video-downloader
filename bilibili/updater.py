@@ -12,7 +12,7 @@ import threading
 import time
 import uuid
 
-from PySide6.QtCore import QObject, QThread, QTimer, QUrl, Qt, Signal
+from PySide6.QtCore import QObject, QThread, QTimer, QUrl, Qt, Signal, QEvent, QPoint
 from PySide6.QtGui import QDesktopServices, QTextCursor, QTextCharFormat, QTextFormat, QTextBlockFormat
 from PySide6.QtWidgets import QDialog, QHBoxLayout, QMessageBox, QPushButton, QProgressBar, QScrollArea, QStackedWidget, QTextBrowser, QVBoxLayout, QWidget
 from app_version import APP_VERSION, RELEASE_PAGE, REPOSITORY
@@ -138,7 +138,7 @@ class UpdatePage(QWidget):
         right = QVBoxLayout()
         right.setSpacing(SPACE["xs"])
         right.addWidget(text_label("最新版本", role="muted"))
-        self.latest = text_label("尚未检查", role="sectionTitle")
+        self.latest = text_label("尚未检查", role="display")
         right.addWidget(self.latest)
         row.addLayout(right, 1)
         self.check_button = QPushButton("检查更新")
@@ -182,6 +182,8 @@ class UpdatePage(QWidget):
         self.transfer_panel.hide()
         layout.insertWidget(1, self.transfer_panel)
         actions = QHBoxLayout()
+        self.footer_actions = actions
+        actions.setContentsMargins(1, 0, UPDATE["scroll_gutter"], 0)
         self.download_button = QPushButton("下载更新")
         self.download_button.setObjectName("primary")
         self.download_button.hide()
@@ -200,15 +202,22 @@ class UpdatePage(QWidget):
         outer.addLayout(actions)
         links = QHBoxLayout()
         self.github_button = QPushButton("开源项目")
-        self.github_button.setObjectName("link")
+        self.github_button.setObjectName("updateLink")
         self.github_button.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(f"https://github.com/{REPOSITORY}")))
         links.addWidget(self.github_button)
         self.releases_button = QPushButton("历史版本")
-        self.releases_button.setObjectName("link")
+        self.releases_button.setObjectName("updateLink")
         self.releases_button.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(RELEASE_PAGE)))
         links.addWidget(self.releases_button)
-        links.addStretch()
+        links.setSpacing(SPACE["md"])
         actions.addLayout(links)
+        scroll.viewport().installEventFilter(self)
+
+    def eventFilter(self, watched, event):
+        if watched is self.scroll.viewport() and event.type() == QEvent.Resize:
+            viewport_right = watched.mapTo(self, QPoint(watched.width(), 0)).x()
+            self.footer_actions.setContentsMargins(1, 0, max(0, self.width() - viewport_right) + UPDATE["scroll_gutter"], 0)
+        return super().eventFilter(watched, event)
 
 
 class UpdateJob(QThread):

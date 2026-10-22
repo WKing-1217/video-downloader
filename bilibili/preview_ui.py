@@ -96,9 +96,9 @@ def capture_review(app, window, directory):
         check("idle_task_hidden", not window.download_page.task_panel.isVisible())
         visible_texts = [label.text() for label in window.findChildren(QLabel) if label.isVisible() and label.text()]
         check("home_has_only_requested_copy", visible_texts == [window.download_page.greeting.text()])
-        check("chrome_is_monochrome", all(color[1:3] == color[3:5] == color[5:7] for color in COLORS.values()))
+        check("chrome_uses_blue_gray_palette", COLORS["accent"] == "#45658a" and COLORS["surface"] == "#ffffff")
         send = window.download_page.submit.grab()
-        check("submit_button_is_black", send.toImage().pixelColor(round(6 * send.devicePixelRatioF()), round(21 * send.devicePixelRatioF())).name() == COLORS["accent"])
+        check("submit_button_uses_primary_accent", send.toImage().pixelColor(round(6 * send.devicePixelRatioF()), round(21 * send.devicePixelRatioF())).name() == COLORS["accent"])
         rects = [window.download_page.recent.visualItemRect(window.download_page.recent.item(i)) for i in range(3)]
         check("three_home_previews_share_one_row", len({rect.y() for rect in rects}) == 1 and all(rect.width() > 150 for rect in rects))
         QTest.mouseClick(window.menu_button, Qt.LeftButton)

@@ -8,16 +8,18 @@ from PySide6.QtSvg import QSvgRenderer
 
 ROOT = Path(__file__).resolve().parent
 COLORS = {
-    "background": "#fbfbfb", "sidebar_background": "#fbfbfb", "surface": "#ffffff",
-    "text": "#171717", "muted": "#696969", "subtle": "#757575",
-    "accent": "#171717", "accent_hover": "#333333", "accent_pressed": "#000000",
-    "border": "#e6e6e6", "hover": "#f2f2f2", "pressed": "#e8e8e8",
-    "tint": "#f0f0f0", "danger": "#262626", "danger_tint": "#f0f0f0",
-    "success": "#262626", "success_tint": "#f0f0f0",
-    "disabled": "#969696", "disabled_surface": "#f1f1f1",
-    "progress_track": "#eaeaea", "thumb": "#eeeeee", "video": "#151515",
-    "overlay": "#202020", "white": "#ffffff",
+    "background": "#f5f7fa", "sidebar_background": "#edf2f7", "surface": "#ffffff",
+    "text": "#202d3d", "muted": "#596b80", "subtle": "#66778b",
+    "accent": "#45658a", "accent_hover": "#365474", "accent_pressed": "#29425e",
+    "border": "#dce4ed", "hover": "#e9eff6", "pressed": "#d7e2ef",
+    "tint": "#dfe9f5", "danger": "#46576d", "danger_tint": "#e8edf3",
+    "success": "#426b66", "success_tint": "#e4f0ed",
+    "disabled": "#78889b", "disabled_surface": "#eaf0f5", "disabled_accent": "#91a3b8",
+    "progress_track": "#e2e9f1", "thumb": "#e6ecf3", "video": "#151b24",
+    "overlay": "#202d3d", "white": "#ffffff", "border_hover": "#b5c6da",
+    "scroll_thumb": "#b4c2d2", "scroll_hover": "#879db7",
 }
+
 SPACE = {"xs": 4, "sm": 8, "md": 12, "lg": 16, "xl": 20, "xxl": 24, "page": 32}
 METRICS = {
     "sidebar": 72, "page_inset": 40, "gap": SPACE["lg"],
@@ -43,7 +45,7 @@ RAIL = {"width": METRICS["sidebar"], "inset": 12, "top": 16, "bottom": 16,
         "title_fade": 16, "title_speed": 34, "title_pause_ms": 900, "title_gap": 48, "animation_ms": 33}
 UPDATE = {"dialog_width": 760, "dialog_height": 600, "dialog_min_width": 560,
           "dialog_min_height": 420, "scroll_gutter": 20, "notes_min_height": 120,
-          "notes_heading": 16, "notes_body": 14}
+          "notes_heading": 16, "notes_body": 14, "footer_font": 16}
 DIALOG = {"settings_width": 820, "settings_height": 680, "settings_min_width": 700,
           "settings_min_height": 560, "inset": 32, "search_width": 640, "search_height": 480,
           "search_min_width": 480, "search_min_height": 320, "search_row": 48}
@@ -65,7 +67,7 @@ def icon(name, color=None):
 
 
 def stylesheet():
-    values = {**COLORS, **METRICS, **HOME,
+    values = {**COLORS, **METRICS, **HOME, **UPDATE,
               # QSS sizes exclude the one-pixel border on both sides.
               "rail_button_size": RAIL["button_size"] - 2, "rail_account_size": RAIL["account_size"] - 2,
               "rail_account_radius": RAIL["account_radius"],
@@ -80,7 +82,7 @@ def stylesheet():
     QSplitter::handle {background: transparent;}
     QSplitter::handle:hover {background: %(border)s;}
     QFrame#sidebar {background: %(sidebar_background)s; border-right: 1px solid %(border)s;}
-    QFrame#iconRail {background: %(background)s; border: none; border-right: 1px solid %(border)s;}
+    QFrame#iconRail {background: %(sidebar_background)s; border: none; border-right: 1px solid %(border)s;}
     QLabel {background: transparent;}
     QLabel#brand {font-size: 16px; font-weight: 600;}
     QLabel#pageTitle {font-size: %(title)spx; font-weight: 600;}
@@ -104,12 +106,12 @@ def stylesheet():
     QLabel#iconBadge[tone="danger"] {background: %(danger_tint)s;}
     QFrame#panel, QFrame#taskPanel {background: %(surface)s; border: 1px solid %(border)s; border-radius: %(radius)spx;}
     QFrame#composer {background: %(surface)s; border: 1px solid %(border)s; border-radius: %(composer_radius)spx;}
-    QFrame#composer[focused="true"] {border-color: #888888;}
+    QFrame#composer[focused="true"] {border-color: %(accent)s;}
     QFrame#locationBar {background: transparent; border: none; border-top: 1px solid %(border)s;}
     QFrame#divider {background: %(border)s; border: none; max-height: 1px;}
     QPushButton, QToolButton {background: %(surface)s; border: 1px solid %(border)s; border-radius: %(control_radius)spx;
         padding: 9px 14px; min-height: 20px;}
-    QPushButton:hover, QToolButton:hover {background: %(hover)s; border-color: #dadada;}
+    QPushButton:hover, QToolButton:hover {background: %(hover)s; border-color: %(border_hover)s;}
     QPushButton:pressed, QToolButton:pressed {background: %(pressed)s;}
     QPushButton:focus, QToolButton:focus {border-color: %(accent)s;}
     QToolButton::menu-indicator {image: none;}
@@ -119,42 +121,44 @@ def stylesheet():
     QPushButton#primary:hover {background: %(accent_hover)s; border-color: %(accent_hover)s;}
     QPushButton#primary:pressed {background: %(accent_pressed)s;}
     QPushButton#primary:focus {border: 2px solid %(accent_pressed)s; padding: 8px 13px;}
-    QPushButton#primary:disabled {background: #aaaaaa; border-color: #aaaaaa;}
+    QPushButton#primary:disabled {background: %(disabled_accent)s; border-color: %(disabled_accent)s;}
     QPushButton#sendAction {background: %(accent)s; border: 1px solid %(accent)s; border-radius: %(action_radius)spx; padding: 0; min-height: 0;}
     QPushButton#sendAction:hover {background: %(accent_hover)s;}
-    QPushButton#sendAction:focus {border: 2px solid #777777;}
+    QPushButton#sendAction:focus {border: 2px solid %(accent_hover)s;}
     QPushButton#sendAction:pressed {background: %(accent_pressed)s;}
     QToolButton#pasteAction, QToolButton#menuButton {background: transparent; border: 1px solid transparent; padding: 0; min-height: 0; border-radius: 10px;}
     QToolButton#pasteAction:hover, QToolButton#menuButton:hover {background: %(hover)s;}
-    QToolButton#pasteAction:focus, QToolButton#menuButton:focus {border-color: #888888;}
+    QToolButton#pasteAction:focus, QToolButton#menuButton:focus {border-color: %(accent)s;}
     QToolButton#menuButton {min-height: %(rail_button_size)spx; max-height: %(rail_button_size)spx;
         min-width: %(rail_button_size)spx; max-width: %(rail_button_size)spx;}
     QToolButton#railButton {background: transparent; border: 1px solid transparent; border-radius: 10px; padding: 0;
         min-height: %(rail_button_size)spx; max-height: %(rail_button_size)spx;
         min-width: %(rail_button_size)spx; max-width: %(rail_button_size)spx;}
-    QToolButton#railButton:hover, QToolButton#railButton:checked {background: %(hover)s;}
+    QToolButton#railButton:hover {background: %(hover)s;}
+    QToolButton#railButton:checked {background: %(tint)s; border-color: %(border_hover)s;}
     QToolButton#railButton:pressed {background: %(pressed)s;}
-    QToolButton#railButton:focus {border-color: #888888;}
+    QToolButton#railButton:focus {border-color: %(accent)s;}
     QToolButton#accountButton {background: %(hover)s; border: 1px solid transparent; border-radius: %(rail_account_radius)spx; padding: 0;
         min-height: %(rail_account_size)spx; max-height: %(rail_account_size)spx;
         min-width: %(rail_account_size)spx; max-width: %(rail_account_size)spx;}
     QToolButton#accountButton:hover {background: %(pressed)s;}
-    QToolButton#accountButton:focus {border-color: #888888;}
+    QToolButton#accountButton:focus {border-color: %(accent)s;}
     QToolButton#sidebarAction {background: transparent; border: 1px solid transparent; border-radius: 8px; padding: 0;
         min-width: %(sidebar_action_size)spx; max-width: %(sidebar_action_size)spx;
         min-height: %(sidebar_action_size)spx; max-height: %(sidebar_action_size)spx;}
     QToolButton#sidebarAction:hover {background: %(hover)s;}
-    QToolButton#sidebarAction:focus {border-color: #888888;}
+    QToolButton#sidebarAction:focus {border-color: %(accent)s;}
     QToolButton#sidebarNav, QToolButton#sidebarAccount {background: transparent; border: 1px solid transparent;
         border-radius: 8px; padding: 0 12px; text-align: left;
         min-height: %(sidebar_row_height)spx; max-height: %(sidebar_row_height)spx;}
-    QToolButton#sidebarNav:hover, QToolButton#sidebarNav:checked, QToolButton#sidebarAccount:hover {background: %(hover)s;}
-    QToolButton#sidebarNav:focus, QToolButton#sidebarAccount:focus {border-color: #888888;}
+    QToolButton#sidebarNav:hover, QToolButton#sidebarAccount:hover {background: %(hover)s;}
+    QToolButton#sidebarNav:checked {background: %(tint)s; color: %(accent_pressed)s; font-weight: 600;}
+    QToolButton#sidebarNav:focus, QToolButton#sidebarAccount:focus {border-color: %(accent)s;}
     QListWidget#sidebarRecent, QListWidget#searchResults {background: transparent; border: none; outline: none; padding: 0;}
     QListWidget#sidebarRecent::item, QListWidget#searchResults::item {border: 1px solid transparent; border-radius: 8px; padding: 0 12px;}
     QListWidget#sidebarRecent::item:hover, QListWidget#searchResults::item:hover {background: %(hover)s;}
     QListWidget#sidebarRecent::item:selected, QListWidget#searchResults::item:selected {background: %(tint)s; color: %(text)s;}
-    QListWidget#sidebarRecent::item:focus, QListWidget#searchResults::item:focus {border-color: #888888;}
+    QListWidget#sidebarRecent::item:focus, QListWidget#searchResults::item:focus {border-color: %(accent)s;}
     QPushButton#nav {border: 1px solid transparent; background: transparent; text-align: left; padding: 11px 12px;}
     QPushButton#nav:hover {background: %(pressed)s;}
     QPushButton#nav:checked {background: %(surface)s; color: %(accent)s; border-color: %(border)s; font-weight: 600;}
@@ -162,11 +166,14 @@ def stylesheet():
     QPushButton#link {background: transparent; border: 1px solid transparent; color: %(accent)s; padding: 6px 4px;}
     QPushButton#link:hover {background: %(tint)s; color: %(accent_hover)s;}
     QPushButton#link:focus {border-color: %(accent)s;}
+    QPushButton#updateLink {background: transparent; border: 1px solid transparent; font-size: %(footer_font)spx; padding: 9px 12px;}
+    QPushButton#updateLink:hover {background: %(hover)s;}
+    QPushButton#updateLink:focus {border-color: %(accent)s;}
     QToolButton#settings {background: transparent; padding: 9px;}
     QLineEdit, QComboBox, QPlainTextEdit, QTextBrowser {
         background: %(surface)s; border: 1px solid %(border)s; border-radius: %(control_radius)spx; padding: 9px 12px;
         selection-background-color: %(accent)s; selection-color: white;}
-    QLineEdit:hover, QComboBox:hover {border-color: #cecece;}
+    QLineEdit:hover, QComboBox:hover {border-color: %(border_hover)s;}
     QLineEdit:focus, QComboBox:focus, QPlainTextEdit:focus, QTextBrowser:focus {border-color: %(accent)s;}
     QLineEdit#linkInput {font-size: 16px; padding: 8px 10px; background: transparent; border: none;}
     QLineEdit#searchInput {padding-left: 6px;}
@@ -182,7 +189,7 @@ def stylesheet():
     QProgressBar[tone="success"]::chunk {background: %(success)s;}
     QProgressBar[tone="danger"]::chunk {background: %(danger)s;}
     QCheckBox {spacing: 10px;}
-    QCheckBox::indicator {width: 17px; height: 17px; border: 1px solid #bfbfbf; border-radius: 4px; background: white;}
+    QCheckBox::indicator {width: 17px; height: 17px; border: 1px solid %(border_hover)s; border-radius: 4px; background: white;}
     QCheckBox::indicator:checked {background: %(accent)s; border-color: %(accent)s; image: url("%(checkmark)s");}
     QCheckBox::indicator:focus {border: 2px solid %(accent)s;}
     QCheckBox::indicator:disabled {background: %(disabled_surface)s; border-color: %(border)s;}
@@ -196,8 +203,8 @@ def stylesheet():
     QListWidget#assetList::item:selected {background: %(tint)s; color: %(accent)s;}
     QScrollArea {border: none; background: transparent;}
     QScrollBar:vertical {background: transparent; width: 8px; margin: 0;}
-    QScrollBar::handle:vertical {background: #cdcdcd; border-radius: 4px; min-height: 32px;}
-    QScrollBar::handle:vertical:hover {background: #b3b3b3;}
+    QScrollBar::handle:vertical {background: %(scroll_thumb)s; border-radius: 4px; min-height: 32px;}
+    QScrollBar::handle:vertical:hover {background: %(scroll_hover)s;}
     QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {height: 0;}
     QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {background: transparent;}
     QMenu {background: %(surface)s; border: 1px solid %(border)s; padding: 5px;}
