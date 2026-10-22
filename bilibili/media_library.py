@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 import sqlite3
 import time
+import uuid
 
 from runtime_paths import data_dir
 
@@ -35,6 +36,14 @@ def gallery_assets(folder, metadata):
     folder = Path(folder)
     return [{**item, "path": str(folder / Path(item.get("path", "")).name)}
             for item in metadata.get("assets", []) if isinstance(item, dict) and item.get("path")]
+
+
+def regular_path(path):
+    path = Path(os.path.abspath(path))
+    if any(parent.is_symlink() or getattr(parent, "is_junction", lambda: False)()
+           for parent in (path, *path.parents)):
+        raise OSError("文件位置含有链接，请在原目录中管理。")
+    return path
 
 
 class LibraryStore:
@@ -80,9 +89,27 @@ class LibraryStore:
         with closing(self.connect()) as db:
             return [row[0] for row in db.execute("SELECT path FROM roots ORDER BY rowid")]
 
-    def rows(self):
+    def rows(self, *, include_hidden=False):
         with closing(self.connect()) as db:
-            return [dict(row) for row in db.execute("SELECT * FROM media WHERE hidden=0 ORDER BY completed DESC,id DESC")]
+            where = "" if include_hidden else " WHERE hidden=0"
+            return [dict(row) for row in db.execute("SELECT * FROM media" + where + " ORDER BY completed DESC,id DESC")]
+
+    def relocate(self, records, roots, save_location):
+        """Keep IDs and history; location changes are idempotent for crash recovery."""
+        with closing(self.connect()) as db, db:
+            for record in records:
+                current = db.execute("SELECT path FROM media WHERE id=?", (record["id"],)).fetchone()
+                if current is None:
+                    continue
+                if path_key(current["path"]) not in {path_key(record["old"]), path_key(record["new"])}:
+                    raise RuntimeError("视频库位置已变化，请刷新后重试。")
+                destination = Path(record["new"])
+                db.execute("UPDATE media SET path=?,path_key=?,metadata=?,file_id=?,mtime=?,thumb=? WHERE id=?",
+                           (str(destination), path_key(destination), record["metadata"],
+                            file_identity(destination), destination.stat().st_mtime, record["thumb"], record["id"]))
+            db.execute("DELETE FROM roots")
+            db.executemany("INSERT OR IGNORE INTO roots VALUES (?)", ((str(Path(root).resolve()),) for root in roots))
+            save_location()
 
     def get(self, identifier):
         with closing(self.connect()) as db:
@@ -148,9 +175,11 @@ class LibraryStore:
         item = self.get(identifier)
         if not item:
             return
-        path = Path(item["path"])
+        path = regular_path(item["path"])
         if item["kind"] == "gallery":
             content = json.loads(item["metadata"])
+            for asset in gallery_assets(path, content):
+                regular_path(asset["path"])
             for asset in gallery_assets(path, content):
                 target = Path(asset["path"])
                 if target.is_file():
@@ -164,6 +193,67 @@ class LibraryStore:
             path.unlink(missing_ok=True)
             path.with_suffix(path.suffix + ".info.json").unlink(missing_ok=True)
         self.update(identifier, hidden=1, state="missing")
+
+    def delete_asset(self, identifier, filename):
+        """Delete one recorded album member and keep receipt/catalogue in sync."""
+        item = self.get(identifier)
+        if not item or item["kind"] != "gallery":
+            raise ValueError("图文作品不存在。")
+        folder = Path(item["path"])
+        content = json.loads(item["metadata"])
+        assets = gallery_assets(folder, content)
+        chosen = next((asset for asset in assets if path_key(asset["path"]) == path_key(filename)), None)
+        if chosen is None:
+            raise ValueError("该文件不属于此作品。")
+        target = regular_path(chosen["path"])
+        if target.parent != folder or target.name in {"", ".", "..", "作品信息.json"}:
+            raise ValueError("图片位置无效。")
+        remaining = [asset for asset in assets if path_key(asset["path"]) != path_key(target)]
+        updated = {**content, "assets": remaining,
+                   "size": sum(Path(asset["path"]).stat().st_size for asset in remaining if Path(asset["path"]).is_file())}
+        receipt = folder / "作品信息.json"
+        previous = receipt.read_bytes() if receipt.is_file() else None
+        temporary = receipt.with_name(".receipt-" + uuid.uuid4().hex)
+        staged = target.with_name(".delete-" + uuid.uuid4().hex)
+        renamed = False
+        try:
+            if target.is_file():
+                target.rename(staged)
+                renamed = True
+            if remaining:
+                with temporary.open("w", encoding="utf-8") as stream:
+                    json.dump(updated, stream, ensure_ascii=False)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                temporary.replace(receipt)
+                self.update(identifier, metadata=json.dumps(updated, ensure_ascii=False),
+                            size=updated["size"], thumb="", state="ready")
+            else:
+                receipt.unlink(missing_ok=True)
+                self.update(identifier, metadata=json.dumps(updated, ensure_ascii=False),
+                            size=0, thumb="", hidden=1, state="missing")
+            if renamed:
+                staged.unlink()
+        except Exception:
+            # An occupied file or failed DB write must leave the old view usable.
+            if renamed and staged.exists():
+                staged.rename(target)
+            if previous is not None:
+                temporary.write_bytes(previous)
+                temporary.replace(receipt)
+            elif receipt.exists():
+                receipt.unlink()
+            self.update(identifier, metadata=item["metadata"], size=item["size"], thumb=item["thumb"],
+                        hidden=item["hidden"], state=item["state"])
+            raise
+        finally:
+            temporary.unlink(missing_ok=True)
+        if not remaining:
+            try:
+                folder.rmdir()
+            except OSError:
+                pass  # Notes and any unrecorded files remain.
+        return self.get(identifier)
 
     def scan(self, cancelled=None):
         count = 0

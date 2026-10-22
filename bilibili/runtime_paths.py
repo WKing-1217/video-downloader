@@ -3,15 +3,26 @@ import json
 import os
 from pathlib import Path
 import sys
+import threading
+import uuid
 
 SOURCE = Path(__file__).resolve().parent
 FROZEN = bool(getattr(sys, "frozen", False))
 APP_DIR = Path(sys.executable).resolve().parent if FROZEN else SOURCE
 SETTINGS = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "LocalVideoDownloader/settings.json"
+_INITIAL_SETTINGS = SETTINGS
+_SETTINGS_LOCK = threading.RLock()
+
+
+def settings_path():
+    # Honour explicit test overrides, while reading the current data environment.
+    if SETTINGS != _INITIAL_SETTINGS:
+        return SETTINGS
+    return Path(os.environ.get("LOCALAPPDATA", Path.home())) / "LocalVideoDownloader/settings.json"
 
 
 def data_dir():
-    folder = SETTINGS.parent
+    folder = settings_path().parent
     folder.mkdir(parents=True, exist_ok=True)
     return folder
 
@@ -21,30 +32,48 @@ def output_dir():
     if override:
         return Path(override).resolve()
     try:
-        saved = json.loads(SETTINGS.read_text(encoding="utf-8")).get("output")
+        saved = read_settings().get("output")
         if saved:
             return Path(saved).resolve()
     except (OSError, ValueError, AttributeError):
         pass
     if FROZEN:
+        try:
+            import winreg
+            registry_key = os.environ.get("VIDEO_DOWNLOADER_REGISTRY_KEY", r"Software\LocalVideoDownloader")
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, registry_key, 0,
+                                winreg.KEY_READ | winreg.KEY_WOW64_64KEY) as key:
+                chosen = winreg.QueryValueEx(key, "InitialOutputDirectory")[0]
+                if isinstance(chosen, str) and Path(chosen).is_absolute():
+                    return Path(chosen).resolve()
+        except (ImportError, OSError):
+            pass
         return Path.home() / "Videos/视频下载器/video"
     return SOURCE.parent / "video"
 
 
 def read_settings():
     try:
-        data = json.loads(SETTINGS.read_text(encoding="utf-8"))
+        data = json.loads(settings_path().read_text(encoding="utf-8"))
         return data if isinstance(data, dict) else {}
     except (OSError, ValueError):
         return {}
 
 
 def save_settings(**values):
-    SETTINGS.parent.mkdir(parents=True, exist_ok=True)
-    data = {**read_settings(), **values}
-    temporary = SETTINGS.with_suffix(".tmp")
-    temporary.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-    temporary.replace(SETTINGS)
+    with _SETTINGS_LOCK:
+        path = settings_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        data = {**read_settings(), **values}
+        temporary = path.with_name(path.name + "." + uuid.uuid4().hex + ".tmp")
+        try:
+            with temporary.open("w", encoding="utf-8") as stream:
+                json.dump(data, stream, ensure_ascii=False)
+                stream.flush()
+                os.fsync(stream.fileno())
+            temporary.replace(path)
+        finally:
+            temporary.unlink(missing_ok=True)
 
 
 def save_output(folder):

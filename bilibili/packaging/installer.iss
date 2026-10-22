@@ -10,6 +10,12 @@
 #ifndef SetupAppId
 #define SetupAppId "{{734095DC-442F-45DA-AD73-7F3B52741394}"
 #endif
+#ifndef SettingsRegistryKey
+#define SettingsRegistryKey "Software\LocalVideoDownloader"
+#endif
+#ifndef SettingsSubdir
+#define SettingsSubdir "LocalVideoDownloader"
+#endif
 [Setup]
 AppId={#SetupAppId}
 AppName=视频下载器
@@ -74,3 +80,68 @@ Name: "{autodesktop}\视频下载器"; Filename: "{app}\VideoDownloader.exe"; Ta
 
 [Run]
 Filename: "{app}\VideoDownloader.exe"; Description: "打开视频下载器"; Flags: nowait postinstall skipifsilent
+
+[Code]
+var
+  VideoDirectoryPage: TInputDirWizardPage;
+  FirstInstallation: Boolean;
+
+procedure InitializeWizard;
+var
+  InitialDirectory: String;
+begin
+  FirstInstallation :=
+    (not FileExists(ExpandConstant('{localappdata}\{#SettingsSubdir}\settings.json'))) and
+    (not RegValueExists(HKCU64, '{#SettingsRegistryKey}', 'InitialOutputDirectory'));
+  VideoDirectoryPage := CreateInputDirPage(wpSelectDir,
+    '选择视频下载位置', '视频和图片保存在哪里？',
+    '安装后也可以在软件设置中更改，已有作品会自动迁移。', False, '');
+  VideoDirectoryPage.Add('视频下载位置：');
+  InitialDirectory := ExpandConstant('{param:VIDEODIR|}');
+  if InitialDirectory = '' then
+    InitialDirectory := AddBackslash(GetEnv('USERPROFILE')) + 'Videos\视频下载器\video';
+  VideoDirectoryPage.Values[0] := InitialDirectory;
+end;
+
+function ShouldSkipPage(PageID: Integer): Boolean;
+begin
+  Result := (PageID = VideoDirectoryPage.ID) and (not FirstInstallation);
+end;
+
+function ValidVideoDirectory: Boolean;
+var
+  Directory, ApplicationDirectory: String;
+begin
+  Directory := RemoveBackslashUnlessRoot(Trim(VideoDirectoryPage.Values[0]));
+  ApplicationDirectory := AddBackslash(Lowercase(ExpandConstant('{app}')));
+  Result := (ExtractFileDrive(Directory) <> '') and
+    (Length(Directory) > Length(ExtractFileDrive(Directory)) + 1) and
+    (Pos(ApplicationDirectory, AddBackslash(Lowercase(Directory))) <> 1);
+end;
+
+function NextButtonClick(CurPageID: Integer): Boolean;
+begin
+  Result := True;
+  if (CurPageID = VideoDirectoryPage.ID) and (not ValidVideoDirectory) then
+  begin
+    MsgBox('请选择独立的视频文件夹，不要使用磁盘根目录或软件安装目录。', mbError, MB_OK);
+    Result := False;
+  end;
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+begin
+  Result := '';
+  if FirstInstallation and (not ValidVideoDirectory) then
+    Result := '视频下载位置无效，请选择独立的视频文件夹。';
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if (CurStep = ssPostInstall) and FirstInstallation then
+  begin
+    if not RegWriteStringValue(HKCU64, '{#SettingsRegistryKey}', 'InitialOutputDirectory',
+      RemoveBackslashUnlessRoot(Trim(VideoDirectoryPage.Values[0]))) then
+      RaiseException('无法保存视频下载位置。');
+  end;
+end;

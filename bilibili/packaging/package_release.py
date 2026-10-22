@@ -24,7 +24,7 @@ def source_files():
     paths = set()
     for path in (ROOT / "bilibili").iterdir():
         if path.is_file() and (path.suffix in {".py", ".bat", ".ps1"} or path.name in {
-                "README.md", "DESIGN.md", "UI_REVIEW.md", "V2_PLAN.md", "V2_DELIVERY.md", "requirements.txt", ".gitignore", "version.json"}):
+                "README.md", "DESIGN.md", "UI_REVIEW.md", "STORAGE_REVIEW.md", "V2_PLAN.md", "V2_DELIVERY.md", "requirements.txt", ".gitignore", "version.json"}):
             paths.add(path)
     for folder in ("bilibili/assets", "bilibili/packaging", "bilibili/qa", "android/package/src", "android/package/res"):
         paths.update(path for path in (ROOT / folder).rglob("*")

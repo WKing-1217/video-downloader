@@ -22,10 +22,10 @@ if os.name == "nt":
     except OSError:
         pass  # The player reports the actual backend error and offers external playback.
 
-from PySide6.QtCore import Qt, QUrl
+from PySide6.QtCore import Qt, QUrl, Signal, QSize
 from PySide6.QtGui import QColor, QDesktopServices, QKeySequence, QPainter, QPixmap, QShortcut, QTransform
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer, QVideoSink
-from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton, QSlider, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton, QSlider, QToolButton, QVBoxLayout, QWidget
 
 from media_library import gallery_assets
 from ui_theme import COLORS, METRICS, SPACE, icon
@@ -69,7 +69,21 @@ class VideoSurface(QWidget):
             painter.drawImage(target, self.image)
 
 
-class PlayerDialog(QDialog):
+class MediaWindow(QDialog):
+    """Independent native windows; lifecycle links do not create a Win32 owner."""
+    def __init__(self, source=None):
+        super().__init__(None, Qt.Window | Qt.WindowTitleHint | Qt.WindowSystemMenuHint
+                         | Qt.WindowMinMaxButtonsHint | Qt.WindowCloseButtonHint)
+        self.setWindowModality(Qt.NonModal)
+        if source is not None:
+            self.setStyleSheet(source.styleSheet())
+            self.setWindowIcon(source.windowIcon())
+            source.destroyed.connect(self.close)
+
+
+class PlayerDialog(MediaWindow):
+    delete_requested = Signal()
+
     def __init__(self, path, title="", parent=None):
         super().__init__(parent)
         self.path = Path(path)
@@ -84,6 +98,13 @@ class PlayerDialog(QDialog):
         heading = QHBoxLayout()
         heading.addWidget(ElidedLabel(title or self.path.stem, role="taskTitle"), 1)
         heading.addWidget(text_label("本地播放", role="caption"))
+        self.delete_button = QToolButton()
+        self.delete_button.setObjectName("sidebarAction")
+        self.delete_button.setIcon(icon("trash", COLORS["text"]))
+        self.delete_button.setAccessibleName("删除此视频")
+        self.delete_button.setToolTip("删除此视频")
+        self.delete_button.clicked.connect(self.delete_requested)
+        heading.addWidget(self.delete_button)
         layout.addLayout(heading)
         self.video = VideoSurface()
         self.video.setMinimumHeight(210)
@@ -201,21 +222,32 @@ class PlayerDialog(QDialog):
         super().closeEvent(event)
 
 
-class GalleryDialog(QDialog):
+class GalleryDialog(MediaWindow):
+    delete_requested = Signal()
+    asset_delete_requested = Signal(object, object)
+
     def __init__(self, item, parent=None):
         super().__init__(parent)
         self.setWindowTitle(item["title"])
         self.resize(900, 650)
         self.setAttribute(Qt.WA_DeleteOnClose)
+        self.item = item
+        self.media = None
         layout = QVBoxLayout(self)
         layout.setContentsMargins(SPACE["xl"], SPACE["xl"], SPACE["xl"], SPACE["xl"])
         layout.setSpacing(SPACE["lg"])
         self.assets = gallery_assets(item["path"], json.loads(item["metadata"]))
         heading = QHBoxLayout()
         heading.addWidget(ElidedLabel(item["title"], role="taskTitle"), 1)
-        counts = {kind: sum(asset["kind"] == kind for asset in self.assets) for kind in ("image", "live_photo", "music")}
-        summary = " · ".join(f"{counts[kind]} {unit}" for kind, unit in (("image", "张图片"), ("live_photo", "段实况"), ("music", "首配乐")) if counts[kind])
-        heading.addWidget(text_label(summary, role="caption"))
+        self.summary = text_label("", role="caption")
+        heading.addWidget(self.summary)
+        self.delete_button = QToolButton()
+        self.delete_button.setObjectName("sidebarAction")
+        self.delete_button.setIcon(icon("trash", COLORS["text"]))
+        self.delete_button.setToolTip("删除整个图文作品")
+        self.delete_button.setAccessibleName("删除整个图文作品")
+        self.delete_button.clicked.connect(self.delete_requested)
+        heading.addWidget(self.delete_button)
         layout.addLayout(heading)
         self.preview = QLabel()
         self.preview.setObjectName("galleryPreview")
@@ -226,26 +258,59 @@ class GalleryDialog(QDialog):
         self.list.setObjectName("assetList")
         self.list.setAccessibleName("作品内的图片、实况视频和配乐")
         self.list.setMaximumHeight(140)
+        self.list.currentRowChanged.connect(self.select)
+        layout.addWidget(self.list)
+        actions = QHBoxLayout()
+        self.delete_asset_button = QPushButton(icon("trash", COLORS["text"]), "删除图片")
+        self.delete_asset_button.clicked.connect(self.request_asset_delete)
+        actions.addWidget(self.delete_asset_button)
+        actions.addStretch()
+        self.open_button = QPushButton("在软件内播放选中媒体")
+        self.open_button.setObjectName("primary")
+        self.open_button.clicked.connect(self.play_selected)
+        actions.addWidget(self.open_button)
+        layout.addLayout(actions)
+        self.update_item(item)
+        QShortcut(QKeySequence(Qt.Key_Delete), self, activated=self.request_asset_delete)
+
+    def update_item(self, item):
+        self.item = item
+        previous = max(0, self.list.currentRow())
+        self.assets = gallery_assets(item["path"], json.loads(item["metadata"]))
+        counts = {kind: sum(asset["kind"] == kind for asset in self.assets) for kind in ("image", "live_photo", "music")}
+        self.summary.setText(" · ".join(f"{counts[kind]} {unit}" for kind, unit in
+                                      (("image", "张图片"), ("live_photo", "段实况"), ("music", "首配乐")) if counts[kind]))
         kinds = {"image": "图片", "live_photo": "实况视频", "music": "配乐"}
         counters = {}
+        self.list.clear()
         for asset in self.assets:
             kind = asset["kind"]
             counters[kind] = counters.get(kind, 0) + 1
             row = QListWidgetItem(f"{kinds.get(kind, '文件')} {counters[kind]:02d}")
             row.setToolTip(Path(asset["path"]).name)
             self.list.addItem(row)
-        self.list.currentRowChanged.connect(self.select)
-        layout.addWidget(self.list)
-        self.open_button = QPushButton("在软件内播放选中媒体")
-        self.open_button.setObjectName("primary")
-        self.open_button.clicked.connect(self.play_selected)
-        layout.addWidget(self.open_button)
-        self.list.setCurrentRow(0)
+        self.list.setCurrentRow(min(previous, len(self.assets) - 1))
+
+    def request_asset_delete(self):
+        index = self.list.currentRow()
+        if 0 <= index < len(self.assets):
+            self.asset_delete_requested.emit(self.item, self.assets[index])
+
+    def release_selected_media(self):
+        if self.media:
+            try:
+                self.media.close()
+            except RuntimeError:
+                pass
+            self.media = None
+        self.preview.clear()
 
     def select(self, index):
         if not 0 <= index < len(self.assets):
             return
         asset = self.assets[index]
+        kind = {"image": "图片", "live_photo": "实况视频", "music": "配乐"}.get(asset["kind"], "文件")
+        self.delete_asset_button.setText("删除" + kind)
         path = Path(asset["path"])
         if asset["kind"] == "image" and path.is_file():
             self.preview.setPixmap(QPixmap(str(path)).scaled(self.preview.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
@@ -259,8 +324,19 @@ class GalleryDialog(QDialog):
     def play_selected(self):
         index = self.list.currentRow()
         if 0 <= index < len(self.assets):
-            self.media = PlayerDialog(self.assets[index]["path"], self.windowTitle(), self)
+            asset = dict(self.assets[index])
+            self.release_selected_media()
+            self.media = PlayerDialog(asset["path"], self.windowTitle(), self)
+            self.media.delete_requested.connect(lambda: self.asset_delete_requested.emit(self.item, asset))
             self.media.show()
+
+    def done(self, result):
+        self.release_selected_media()
+        super().done(result)
+
+    def closeEvent(self, event):
+        self.release_selected_media()
+        super().closeEvent(event)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

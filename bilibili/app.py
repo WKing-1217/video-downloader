@@ -10,7 +10,7 @@ from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtGui import QAction, QActionGroup, QColor, QDesktopServices, QFont, QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog,
     QGraphicsDropShadowEffect, QHBoxLayout, QLineEdit, QListWidgetItem, QMainWindow, QMessageBox,
-    QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QStackedWidget, QToolButton, QVBoxLayout, QWidget, QFrame, QSizePolicy)
+    QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QSplitter, QStackedWidget, QToolButton, QVBoxLayout, QWidget, QFrame, QSizePolicy)
 
 from app_version import APP_VERSION
 from async_jobs import BackgroundPool
@@ -19,10 +19,11 @@ from library_page import LibraryPage
 from media_library import LibraryStore
 from platform_links import PLATFORMS, download_link
 from runtime_paths import APP_DIR, FROZEN, data_dir, output_dir, read_settings, save_output, save_settings
+from storage_ui import StorageController
 from ui_theme import COLORS, DIALOG, HOME, METRICS, RAIL, ROOT, SPACE, icon, stylesheet
 from ui_navigation import MediaSearchDialog, NavigationSidebar
 from ui_widgets import (ComposerFrame, ElidedLabel, IconBadge, LoginSourceComboBox,
-    PasteLinkEdit, RecentDelegate, RecentList, clock_text, divider, panel, set_tone, size_text, text_label)
+    LocationBar, PasteLinkEdit, RecentDelegate, RecentList, clock_text, divider, panel, set_tone, size_text, text_label)
 from updater import UpdateController, UpdatePage
 
 
@@ -259,6 +260,32 @@ class SettingsDialog(QDialog):
         layout.setContentsMargins(DIALOG["inset"], DIALOG["inset"], DIALOG["inset"], DIALOG["inset"])
         layout.setSpacing(SPACE["xxl"])
         layout.addWidget(text_label("设置", role="pageTitle"))
+        outer = layout
+        scroll = QScrollArea()
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        canvas = QWidget()
+        canvas.setObjectName("pageCanvas")
+        layout = QVBoxLayout(canvas)
+        layout.setContentsMargins(0, 0, SPACE["xs"], 0)
+        layout.setSpacing(SPACE["lg"])
+        scroll.setWidget(canvas)
+        outer.addWidget(scroll, 1)
+        storage, body = panel()
+        body.addWidget(text_label("下载位置", role="sectionTitle"))
+        self.location_bar = LocationBar(window.output, embedded=True)
+        self.location_bar.open_requested.connect(window.library.open_folder)
+        self.location_bar.change_requested.connect(window.library.choose_output)
+        body.addWidget(self.location_bar)
+        body.addWidget(text_label("更改后自动迁移作品，并清理空的旧目录。", role="muted", wrap=True))
+        self.storage_status = text_label("", role="muted", wrap=True)
+        body.addWidget(self.storage_status)
+        self.storage_retry = QPushButton("继续迁移 / 清理")
+        self.storage_retry.clicked.connect(window.storage.recover)
+        body.addWidget(self.storage_retry, 0, Qt.AlignLeft)
+        window.storage.changed.connect(self.render_storage)
+        layout.addWidget(storage)
         account, body = panel()
         body.addWidget(text_label("账号与登录", role="sectionTitle"))
         self.auto_login = QCheckBox("自动读取本机浏览器的登录状态")
@@ -306,11 +333,20 @@ class SettingsDialog(QDialog):
         close.setDefault(True)
         close.clicked.connect(self.close)
         row.addWidget(close)
-        layout.addLayout(row)
+        outer.addLayout(row)
         self.accounts.changed.connect(self.render)
         self.auto_login.toggled.connect(self.configure)
         self.source.currentIndexChanged.connect(self.configure)
         self.render()
+        self.render_storage()
+
+    def render_storage(self):
+        self.location_bar.set_path(self.window.output)
+        self.location_bar.choose_button.setEnabled(not self.window.storage.running)
+        self.storage_status.setText(self.window.storage.message)
+        self.storage_status.setVisible(bool(self.window.storage.message))
+        self.storage_retry.setVisible(self.window.storage.service.pending())
+        self.storage_retry.setEnabled(not self.window.storage.running)
 
     def render(self):
         self.status.setText(self.accounts.status)
@@ -363,6 +399,8 @@ class DownloadWindow(QMainWindow):
         for old_root in read_settings().get("library_roots", []):
             if isinstance(old_root, str):
                 self.store.add_root(old_root)
+        if not read_settings().get("output") and not os.environ.get("VIDEO_DOWNLOADER_OUTPUT"):
+            save_settings(output=str(self.output), library_roots=self.store.roots())
         self.logs = deque(maxlen=800)
         self.background = BackgroundPool(self, 1)
         self.accounts = AccountService(self)
@@ -392,12 +430,25 @@ class DownloadWindow(QMainWindow):
             action.triggered.connect(lambda checked=False, page=index: self.set_page(page))
             self.group.addAction(action)
             self.navigation.append(action)
-        shell.addWidget(self.icon_rail)
+        try:
+            self.sidebar_width = int(read_settings().get("sidebar_width", RAIL["expanded_width"]))
+        except (ValueError, TypeError):
+            self.sidebar_width = RAIL["expanded_width"]
+        self.sidebar_width = max(RAIL["expanded_min"], min(RAIL["expanded_max"], self.sidebar_width))
+        self.splitter = QSplitter(Qt.Horizontal)
+        self.splitter.setChildrenCollapsible(False)
+        self.splitter.setHandleWidth(RAIL["resize_handle"])
+        self.splitter.addWidget(self.icon_rail)
+        self.splitter.splitterMoved.connect(self.sidebar_resized)
+        self.icon_rail.expanded_changed.connect(self.layout_sidebar)
+        shell.addWidget(self.splitter)
         self.search_shortcut = QShortcut(QKeySequence("Ctrl+K"), self)
         self.search_shortcut.activated.connect(self.show_search)
         self.sidebar_shortcut = QShortcut(QKeySequence("Ctrl+B"), self)
         self.sidebar_shortcut.activated.connect(self.icon_rail.toggle)
-        body_shell = QVBoxLayout()
+        self.body_canvas = QWidget()
+        self.body_canvas.setMinimumWidth(RAIL["content_min"])
+        body_shell = QVBoxLayout(self.body_canvas)
         body_shell.setContentsMargins(0, 0, 0, 0)
         body_shell.setSpacing(0)
         page_header = QWidget()
@@ -423,6 +474,7 @@ class DownloadWindow(QMainWindow):
         self.download_page.open_requested.connect(self.open_media)
         self.library.download_requested.connect(lambda: self.set_page(0))
         self.library.output_changed.connect(self.choose_output)
+        self.library.before_delete.connect(self.release_media)
         self.library.refreshed.connect(self.download_page.render_recent)
         self.library.refreshed.connect(self.icon_rail.set_rows)
         self.library.refreshed.connect(self.refresh_search)
@@ -437,9 +489,12 @@ class DownloadWindow(QMainWindow):
         self.updater.log.connect(self.add_log)
         content.addWidget(self.pages, 1)
         body_shell.addLayout(content, 1)
-        shell.addLayout(body_shell, 1)
+        self.splitter.addWidget(self.body_canvas)
+        self.splitter.setStretchFactor(0, 0)
+        self.splitter.setStretchFactor(1, 1)
         self.setCentralWidget(self.central)
         self.setStyleSheet(stylesheet())
+        self.layout_sidebar(False)
         self.downloads.changed.connect(self.render_task)
         self.downloads.rejected.connect(self.download_page.reject_input)
         self.downloads.duplicate.connect(self.already_downloaded)
@@ -456,6 +511,12 @@ class DownloadWindow(QMainWindow):
         self.last_result = None
         self.player_dialog = None
         self.settings_dialog = None
+        self.storage = StorageController(self)
+        self.library.can_delete = lambda: not self.storage.service.pending()
+        self.storage.location_changed.connect(self.output_migrated)
+        if self.storage.service.pending():
+            self.downloads.output_locked = True
+            QTimer.singleShot(0, self.storage.recover)
         self.stall_timer = QTimer(self)
         self.stall_timer.setInterval(1000)
         self.stall_timer.timeout.connect(self.update_stall)
@@ -477,6 +538,24 @@ class DownloadWindow(QMainWindow):
                 self.update_page.status.setText(result.get("message", ""))
             except (OSError, ValueError):
                 pass
+
+    def layout_sidebar(self, expanded=None):
+        if not hasattr(self, "splitter"):
+            return
+        total = self.splitter.width() - RAIL["resize_handle"]
+        available = max(0, total - RAIL["content_min"])
+        width = min(self.sidebar_width, max(RAIL["expanded_min"], available)) if self.icon_rail.expanded else RAIL["width"]
+        self.splitter.setSizes([width, max(RAIL["content_min"], total - width)])
+        self.splitter.handle(1).setEnabled(self.icon_rail.expanded)
+
+    def sidebar_resized(self, *_):
+        if self.icon_rail.expanded:
+            self.sidebar_width = self.icon_rail.width()
+            save_settings(sidebar_width=self.sidebar_width)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.layout_sidebar()
 
     def set_page(self, page):
         self.pages.setCurrentIndex(page)
@@ -565,20 +644,57 @@ class DownloadWindow(QMainWindow):
             self.add_log("网页登录恢复：" + str(error))
 
     def choose_output(self, folder):
+        return self.storage.start(folder)
+
+    def output_migrated(self, folder, result):
+        self.output = self.downloads.output = Path(folder)
+        self.library.set_output(folder)
+        if self.last_result and self.last_result.get("path") in result.get("paths", {}):
+            self.last_result["path"] = result["paths"][self.last_result["path"]]
+
+    def delete_gallery_asset(self, item, asset):
+        if self.storage.running or self.library.storage_busy:
+            return
+        if self.storage.service.pending():
+            QMessageBox.information(self.player_dialog or self, "迁移尚未完成", "请先在设置中完成目录迁移或旧文件清理，再删除图片。")
+            return
+        kind = {"image": "图片", "live_photo": "实况视频", "music": "配乐"}.get(asset["kind"], "文件")
+        dialog = QMessageBox(self.player_dialog or self)
+        dialog.setWindowTitle("删除" + kind)
+        dialog.setTextFormat(Qt.PlainText)
+        dialog.setText("删除这" + ("张" if asset["kind"] == "image" else "个") + kind + "？本地文件也会删除。")
+        dialog.setStandardButtons(QMessageBox.Yes | QMessageBox.Cancel)
+        dialog.setDefaultButton(QMessageBox.Cancel)
+        if dialog.exec() != QMessageBox.Yes:
+            return
+        viewer = self.player_dialog
+        viewer.release_selected_media()
+        def remove():
+            try:
+                updated = self.store.delete_asset(item["id"], asset["path"])
+                if updated["hidden"]:
+                    self.release_media(item)
+                else:
+                    viewer.update_item(updated)
+                self.library.notice.setText("已删除" + kind + "。")
+            except (OSError, ValueError) as error:
+                QMessageBox.information(self, "未能删除", str(error))
+        self.library.after_media_idle(remove)
+
+    def release_media(self, item=None):
+        if not self.player_dialog:
+            return
         try:
-            target = Path(folder).resolve()
-            target.mkdir(parents=True, exist_ok=True)
-            self.store.add_root(self.output)
-            self.store.add_root(target)
-            save_output(target)
-            save_settings(library_roots=self.store.roots())
-            self.output = target
-            self.downloads.output = target
-            self.library.set_output(target)
-        except OSError as error:
-            self.download_page.reject_input("无法保存目录设置：" + str(error))
+            if item and getattr(self.player_dialog, "media_id", None) != item["id"]:
+                return
+            self.player_dialog.close()
+        except RuntimeError:
+            pass
+        self.player_dialog = None
 
     def open_media(self, item):
+        if self.storage.running or self.library.storage_busy:
+            return
         if not Path(item["path"]).exists():
             QMessageBox.information(self, "文件不可用", "文件已被移动或删除，请刷新视频库，或在保存文件夹中确认位置。")
             self.library.refresh()
@@ -591,6 +707,10 @@ class DownloadWindow(QMainWindow):
                 except RuntimeError:
                     pass
             self.player_dialog = GalleryDialog(item, self) if item["kind"] == "gallery" else PlayerDialog(item["path"], item["title"], self)
+            self.player_dialog.media_id = item["id"]
+            self.player_dialog.delete_requested.connect(lambda record=item: self.library.delete_file(record))
+            if item["kind"] == "gallery":
+                self.player_dialog.asset_delete_requested.connect(self.delete_gallery_asset)
             self.player_dialog.show()
         except (ImportError, RuntimeError) as error:
             reply = QMessageBox.question(self, "内置播放不可用", "播放组件未能打开：" + str(error) + "\n是否使用 Windows 默认播放器？")
@@ -633,6 +753,7 @@ class DownloadWindow(QMainWindow):
                     event.ignore()
                     return
             self.closing = True
+            self.storage.service.cancelled.set()
             self.downloads.shutdown()
             self.updater.shutdown()
             self.accounts.stop()
@@ -666,7 +787,7 @@ def main():
     QApplication.setAttribute(Qt.AA_ShareOpenGLContexts)
     app = QApplication(sys.argv)
     app.setFont(QFont("Segoe UI", 10))
-    verification = "--verify-install" in sys.argv
+    verification = "--verify-install" in sys.argv or "--verify-storage" in sys.argv
     if verification:
         from desktop_verify import prepare_fonts
         prepare_fonts()
@@ -699,7 +820,10 @@ def main():
         window.activateWindow()
     server.newConnection.connect(activate)
     window.show()
-    if verification:
+    if "--verify-storage" in sys.argv:
+        from storage_verify import verify_storage
+        verify_storage(app, window, sys.argv[sys.argv.index("--verify-storage") + 1])
+    elif verification:
         from desktop_verify import verify
         verify(app, window, sys.argv[sys.argv.index("--verify-install") + 1])
     elif len(sys.argv) > 1 and not sys.argv[1].startswith("--"):

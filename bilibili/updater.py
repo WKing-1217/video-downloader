@@ -404,6 +404,9 @@ class UpdateController(QObject):
         if self.window.downloads.busy():
             self.page.transfer_message.setText("请先完成或取消视频任务，再安装更新。")
             return
+        if getattr(self.window, "storage", None) and (self.window.storage.running or self.window.storage.service.pending()):
+            self.page.transfer_message.setText("请先完成视频目录迁移，再安装更新。")
+            return
         if not FROZEN:
             self.page.transfer_message.setText("当前是开发环境，请使用打包后的程序验证正式安装；下载功能不受影响。")
             return

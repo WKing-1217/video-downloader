@@ -161,6 +161,7 @@ class DownloadManager(QObject):
         self.last = None
         self.process = None
         self.closing = False
+        self.output_locked = False
         self.catalogue_jobs = BackgroundPool(self, 1)
         self.pending_keys = set()
 
@@ -168,6 +169,9 @@ class DownloadManager(QObject):
         return bool(self.active or self.queue or self.catalogue_jobs.active)
 
     def submit(self, text, *, force=False):
+        if self.output_locked:
+            self.rejected.emit("正在迁移视频，完成后即可下载。")
+            return None
         try:
             url, platform, key = download_link(text)
         except ValueError as error:

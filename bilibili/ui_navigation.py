@@ -1,10 +1,46 @@
 """Collapsible desktop navigation and a search overlay independent of the library."""
-from PySide6.QtCore import QEvent, QSize, Qt, Signal
+from PySide6.QtCore import QElapsedTimer, QEvent, QRectF, QSize, Qt, QTimer, Signal
+from PySide6.QtGui import QBrush, QColor, QLinearGradient, QPen
 from PySide6.QtWidgets import (QButtonGroup, QDialog, QFrame, QHBoxLayout, QLineEdit,
-    QListWidget, QListWidgetItem, QSizePolicy, QStackedWidget, QToolButton, QVBoxLayout)
+    QListWidget, QListWidgetItem, QSizePolicy, QStackedWidget, QStyle, QStyledItemDelegate,
+    QStyleOptionViewItem, QToolButton, QVBoxLayout)
 
 from ui_theme import COLORS, DIALOG, RAIL, SPACE, icon
 from ui_widgets import text_label
+
+
+class FadingTitleDelegate(QStyledItemDelegate):
+    def paint(self, painter, option, index):
+        view = self.parent()
+        styled = QStyleOptionViewItem(option)
+        self.initStyleOption(styled, index)
+        title, styled.text = styled.text, ""
+        view.style().drawControl(QStyle.CE_ItemViewItem, styled, painter, view)
+        area = QRectF(option.rect).adjusted(SPACE["md"], 0, -SPACE["md"], 0)
+        width = option.fontMetrics.horizontalAdvance(title)
+        offset = view.title_offset(width, area.width())
+        painter.save()
+        painter.setClipRect(area)
+        painter.setFont(option.font)
+        if width > area.width():
+            fade = min(RAIL["title_fade"] / max(area.width(), 1), .25)
+            gradient = QLinearGradient(area.left(), 0, area.right(), 0)
+            color, clear = QColor(COLORS["text"]), QColor(COLORS["text"])
+            clear.setAlpha(0)
+            gradient.setColorAt(0, clear if view.clock.elapsed() > RAIL["title_pause_ms"] else color)
+            gradient.setColorAt(fade, color)
+            gradient.setColorAt(1 - fade, color)
+            gradient.setColorAt(1, clear)
+            painter.setPen(QPen(QBrush(gradient), 1))
+        else:
+            painter.setPen(QColor(COLORS["text"]))
+        painter.drawText(QRectF(area.left() - offset, area.top(), max(width, area.width()) + 1, area.height()),
+                         Qt.AlignLeft | Qt.AlignVCenter | Qt.TextSingleLine, title)
+        if width > area.width():
+            # A second copy enters from the right as the first leaves the left.
+            painter.drawText(QRectF(area.left() - offset + width + RAIL["title_gap"], area.top(), width + 1, area.height()),
+                             Qt.AlignLeft | Qt.AlignVCenter | Qt.TextSingleLine, title)
+        painter.restore()
 
 
 class MediaTitleList(QListWidget):
@@ -14,6 +50,15 @@ class MediaTitleList(QListWidget):
         super().__init__(parent)
         self.setObjectName(role)
         self.row_height = row_height
+        self.animated = role == "sidebarRecent"
+        self.signature = None
+        self.clock = QElapsedTimer()
+        self.clock.start()
+        self.animation = QTimer(self)
+        self.animation.setInterval(RAIL["animation_ms"])
+        self.animation.timeout.connect(self.viewport().update)
+        if self.animated:
+            self.setItemDelegate(FadingTitleDelegate(self))
         self.setTextElideMode(Qt.ElideRight)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setVerticalScrollMode(QListWidget.ScrollPerPixel)
@@ -21,6 +66,10 @@ class MediaTitleList(QListWidget):
         self.itemClicked.connect(self.open_item)
 
     def set_rows(self, rows):
+        signature = [(row["id"], row["title"]) for row in rows]
+        if signature != self.signature:
+            self.signature = signature
+            self.clock.restart()
         selected = self.currentItem().data(Qt.UserRole)["id"] if self.currentItem() else None
         self.clear()
         for row in rows:
@@ -31,6 +80,35 @@ class MediaTitleList(QListWidget):
             self.addItem(item)
             if row["id"] == selected:
                 self.setCurrentItem(item)
+        self.sync_animation()
+
+    def title_offset(self, text_width, available):
+        if text_width <= available:
+            return 0
+        elapsed = max(0, self.clock.elapsed() - RAIL["title_pause_ms"])
+        return elapsed * RAIL["title_speed"] / 1000 % (text_width + RAIL["title_gap"])
+
+    def sync_animation(self):
+        width = self.viewport().width() - 2 * SPACE["md"]
+        needed = self.animated and self.isVisible() and any(
+            self.fontMetrics().horizontalAdvance(self.item(number).text()) > width for number in range(self.count()))
+        if needed and not self.animation.isActive():
+            self.animation.start()
+        elif not needed:
+            self.animation.stop()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        QTimer.singleShot(0, self.sync_animation)
+
+    def hideEvent(self, event):
+        self.animation.stop()
+        super().hideEvent(event)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.clock.restart()
+        self.sync_animation()
 
     def open_item(self, item):
         if item:
@@ -45,6 +123,7 @@ class MediaTitleList(QListWidget):
 
 
 class NavigationSidebar(QFrame):
+    expanded_changed = Signal(bool)
     page_requested = Signal(int)
     search_requested = Signal()
     settings_requested = Signal()
@@ -121,7 +200,8 @@ class NavigationSidebar(QFrame):
 
     def set_expanded(self, expanded):
         self.expanded = expanded
-        self.setFixedWidth(RAIL["expanded_width"] if expanded else RAIL["width"])
+        self.setMinimumWidth(RAIL["expanded_min"] if expanded else RAIL["width"])
+        self.setMaximumWidth(RAIL["expanded_max"] if expanded else RAIL["width"])
         for widget in (self.brand, self.header_search, self.collapse_button):
             widget.setVisible(expanded)
         # The expanded header contains the brand, search and collapse controls.
@@ -154,6 +234,7 @@ class NavigationSidebar(QFrame):
         self.setAccessibleName("导航侧栏，已展开" if expanded else "导航侧栏，已收起")
         if self.isVisible():
             (self.collapse_button if expanded else self.logo).setFocus(Qt.OtherFocusReason)
+        self.expanded_changed.emit(expanded)
 
     def set_page(self, page):
         self.navigation[page].setChecked(True)

@@ -88,8 +88,11 @@ try:
  with patch('library_page.QDesktopServices.openUrl',return_value=True) as opened:
   window.library.open_folder();check('open_folder_uses_native_directory_url',opened.call_args.args[0].isLocalFile())
  new=work/'new-videos';window.choose_output(str(new))
- check('changing_directory_preserves_history',history.exists() and str(video.resolve()) in store.roots() and str(new.resolve()) in store.roots())
+ wait_until(lambda:not window.storage.running)
+ check('changing_directory_migrates_history_and_cleans_old_root',not history.exists() and not video.exists() and store.roots()==[str(new.resolve())])
+ history=new/history.name
  item=next(item for item in store.rows() if item['path']==str(history))
+ window.storage.dialog.close()
  window.open_media(item);QTest.qWait(300)
  check('card_opens_internal_player',window.player_dialog.player.source().isLocalFile())
  window.player_dialog.close();QTest.qWait(100);window.player_dialog=None
@@ -104,9 +107,11 @@ try:
  with patch.object(QMessageBox,'exec',return_value=QMessageBox.Cancel):window.library.delete_file(record)
  check('cancel_file_delete_preserves_file',target.exists())
  with patch.object(QMessageBox,'exec',return_value=QMessageBox.Yes):window.library.delete_file(record)
+ wait_until(lambda:not target.exists())
  check('confirmed_file_delete_removes_file',not target.exists())
  window.set_page(0)
- window.downloads.output=video
+ # The fixture worker reads this environment; the real worker receives --output.
+ os.environ['VIDEO_DOWNLOADER_OUTPUT']=str(new)
  # Right-click paste goes through the menu action, not textChanged.
  app.clipboard().setText('https://www.bilibili.com/video/BV1fyeh6GEkL')
  def menu_paste():

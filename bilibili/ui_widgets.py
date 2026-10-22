@@ -115,16 +115,17 @@ class LocationBar(QFrame):
     open_requested = Signal()
     change_requested = Signal()
 
-    def __init__(self, path, parent=None):
+    def __init__(self, path, parent=None, *, embedded=False):
         super().__init__(parent)
-        self.setObjectName("locationBar")
+        self.setObjectName("embeddedLocationBar" if embedded else "locationBar")
         row = QHBoxLayout(self)
-        row.setContentsMargins(0, SPACE["lg"], 0, 0)
+        row.setContentsMargins(0, 0 if embedded else SPACE["lg"], 0, 0)
         row.setSpacing(SPACE["md"])
         row.addWidget(IconBadge("folder"))
         labels = QVBoxLayout()
         labels.setSpacing(SPACE["xs"])
-        labels.addWidget(text_label("保存位置", role="caption"))
+        if not embedded:
+            labels.addWidget(text_label("保存位置", role="caption"))
         self.location = ElidedLabel(str(path))
         labels.addWidget(self.location)
         row.addLayout(labels, 1)

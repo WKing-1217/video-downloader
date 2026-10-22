@@ -23,7 +23,11 @@ def seed_samples(store, output):
                   ("*朋友*.mp4", "朋友的酒 · 现场音乐影像"))
     output.mkdir(parents=True, exist_ok=True)
     from runtime_paths import tool
+    recorded = store.rows(include_hidden=True)
     for number, (pattern, title) in enumerate(selections, 1):
+        # Deleted or migrated preview media must not be silently seeded again.
+        if any(row["title"] == title for row in recorded):
+            continue
         sources = sorted((ROOT.parent / "video").glob(pattern))
         if not sources:
             continue
@@ -269,15 +273,23 @@ def main():
     parser.add_argument("--page", type=int, default=0, choices=(0, 1, 2))
     parser.add_argument("--snapshot-on-start", action="store_true")
     parser.add_argument("--expanded", action="store_true")
+    parser.add_argument("--work-dir", type=Path, help="Use a separate local review directory")
     args = parser.parse_args()
     if args.capture:
         os.environ["QT_QPA_PLATFORM"] = "offscreen"
         os.environ["QT_SCALE_FACTOR"] = args.scale
     work = ROOT / "build" / ("ui-review/scale-" + args.scale if args.capture else "ui-preview")
+    if args.work_dir:
+        work = args.work_dir.resolve()
     work.mkdir(parents=True, exist_ok=True)
     os.environ["LOCALAPPDATA"] = str(work / "preferences")
     output = work / "示例视频"
-    os.environ["VIDEO_DOWNLOADER_OUTPUT"] = str(output)
+    os.environ.pop("VIDEO_DOWNLOADER_OUTPUT", None)
+    from runtime_paths import read_settings, save_settings
+    if read_settings().get("output"):
+        output = Path(read_settings()["output"])
+    else:
+        save_settings(output=str(output))
 
     from PySide6.QtCore import Qt, QTimer
     from PySide6.QtWidgets import QApplication

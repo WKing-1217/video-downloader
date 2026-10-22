@@ -81,6 +81,7 @@ class MediaModel(QAbstractListModel):
         self.cache = data_dir() / "thumbnails"
         self.cache.mkdir(exist_ok=True)
         self.closing = False
+        self.paused = False
 
     def rowCount(self, parent=QModelIndex()):
         return 0 if parent.isValid() else len(self.rows)
@@ -119,7 +120,7 @@ class MediaModel(QAbstractListModel):
                 self.pixmaps.move_to_end(thumb)
             return self.pixmaps[thumb]
         key = (item["id"], item["mtime"], item["size"])
-        if key not in self.requested and item["state"] != "missing" and not self.closing:
+        if key not in self.requested and item["state"] != "missing" and not self.closing and not self.paused:
             # The delegate calls this for visible rows, not for every file.
             self.requested.add(key)
             def work(record=dict(item)):
@@ -144,6 +145,10 @@ class MediaModel(QAbstractListModel):
 
 
 class MediaDelegate(QStyledItemDelegate):
+    @staticmethod
+    def delete_rect(rect):
+        return QRect(rect.right() - METRICS["card_inset"] - 40, rect.top() + METRICS["card_inset"] + 8, 32, 32)
+
     def sizeHint(self, option, index):
         view = self.parent()
         size = view.gridSize() if isinstance(view, QListView) else QSize()
@@ -197,6 +202,10 @@ class MediaDelegate(QStyledItemDelegate):
             painter.setBrush(QColor(COLORS["surface"]))
             painter.drawEllipse(play)
             icon("play", COLORS["accent"]).paint(painter, play.adjusted(8, 8, -8, -8))
+            delete = self.delete_rect(option.rect)
+            painter.setBrush(QColor(COLORS["surface"]))
+            painter.drawRoundedRect(delete, SPACE["sm"], SPACE["sm"])
+            icon("trash", COLORS["text"]).paint(painter, delete.adjusted(7, 7, -7, -7))
         painter.setClipping(False)
         inset = card.adjusted(SPACE["md"], picture.height() + SPACE["sm"], -SPACE["md"], -SPACE["sm"])
         painter.setPen(QColor(COLORS["text"]))
@@ -229,16 +238,23 @@ class MediaDelegate(QStyledItemDelegate):
 
 class MediaGrid(QListView):
     open_requested = Signal(object)
+    delete_requested = Signal(object)
 
     def mouseReleaseEvent(self, event):
         super().mouseReleaseEvent(event)
         if event.button() == Qt.LeftButton:
             index = self.indexAt(event.position().toPoint())
             if index.isValid():
-                self.open_requested.emit(index.data(MediaModel.Row))
+                if MediaDelegate.delete_rect(self.visualRect(index)).contains(event.position().toPoint()):
+                    self.delete_requested.emit(index.data(MediaModel.Row))
+                else:
+                    self.open_requested.emit(index.data(MediaModel.Row))
 
     def keyPressEvent(self, event):
-        if event.key() in {Qt.Key_Return, Qt.Key_Enter} and self.currentIndex().isValid():
+        if event.key() == Qt.Key_Delete and self.currentIndex().isValid():
+            self.delete_requested.emit(self.currentIndex().data(MediaModel.Row))
+            event.accept()
+        elif event.key() in {Qt.Key_Return, Qt.Key_Enter} and self.currentIndex().isValid():
             self.open_requested.emit(self.currentIndex().data(MediaModel.Row))
             event.accept()
         else:
@@ -270,6 +286,7 @@ class LibraryPage(QWidget):
     output_changed = Signal(str)
     refreshed = Signal(object)
     log = Signal(str)
+    before_delete = Signal(object)
 
     def __init__(self, store, output, parent=None):
         super().__init__(parent)
@@ -278,6 +295,8 @@ class LibraryPage(QWidget):
         self.scan_cancel = threading.Event()
         self.scanning = False
         self.closing = False
+        self.storage_busy = False
+        self.can_delete = lambda: True
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(SPACE["lg"])
@@ -297,13 +316,20 @@ class LibraryPage(QWidget):
         self.refresh_button = QPushButton(icon("nav-update", COLORS["muted"]), "刷新")
         self.refresh_button.clicked.connect(self.refresh)
         toolbar.addWidget(self.refresh_button)
+        self.delete_button = QPushButton(icon("trash", COLORS["text"]), "")
+        self.delete_button.setFixedWidth(METRICS["control_height"])
+        self.delete_button.setAccessibleName("删除所选作品")
+        self.delete_button.setToolTip("删除所选作品 · Delete")
+        self.delete_button.setEnabled(False)
+        self.delete_button.clicked.connect(self.delete_selected)
+        toolbar.addWidget(self.delete_button)
         layout.addLayout(toolbar)
         self.notice = text_label("正在导入原有视频…", role="muted", wrap=True)
         layout.addWidget(self.notice)
         self.model = MediaModel(store, self.pool, self)
         self.grid = MediaGrid()
         self.grid.setObjectName("libraryGrid")
-        self.grid.setAccessibleName("作品列表，按回车打开，右键管理文件")
+        self.grid.setAccessibleName("作品列表，回车打开，Delete 删除，右键管理文件")
         self.grid.setMouseTracking(True)
         self.grid.setViewMode(QListView.IconMode)
         self.grid.setResizeMode(QListView.Adjust)
@@ -314,6 +340,8 @@ class LibraryPage(QWidget):
         self.grid.setModel(self.model)
         self.grid.setItemDelegate(MediaDelegate(self.grid))
         self.grid.open_requested.connect(self.open_requested)
+        self.grid.delete_requested.connect(self.delete_file)
+        self.grid.selectionModel().selectionChanged.connect(lambda *_: self.delete_button.setEnabled(self.grid.currentIndex().isValid() and not self.storage_busy))
         self.grid.setContextMenuPolicy(Qt.CustomContextMenu)
         self.grid.customContextMenuRequested.connect(self.context_menu)
         self.empty = EmptyState("暂无视频", "", action="下载")
@@ -375,7 +403,7 @@ class LibraryPage(QWidget):
             self.refreshed.emit(self.model.all_rows)
 
     def refresh(self):
-        if self.scanning or self.closing:
+        if self.scanning or self.closing or self.storage_busy:
             return
         self.scanning = True
         self.refresh_button.setEnabled(False)
@@ -388,6 +416,9 @@ class LibraryPage(QWidget):
         self.reload()
         roots = [path for path in self.store.roots() if Path(path).is_dir()]
         existing = set(self.watcher.directories())
+        removed = list(existing - set(roots))
+        if removed:
+            self.watcher.removePaths(removed)
         added = [path for path in roots if path not in existing][:128]
         if added:
             self.watcher.addPaths(added)
@@ -406,16 +437,28 @@ class LibraryPage(QWidget):
             self.notice.setText("无法打开目录：" + str(error))
 
     def choose_output(self):
-        folder = QFileDialog.getExistingDirectory(self, "选择后续视频的保存位置", str(self.output))
+        folder = QFileDialog.getExistingDirectory(self, "选择视频下载位置", str(self.output))
         if folder:
             self.output_changed.emit(folder)
 
     def set_output(self, folder):
-        self.store.add_root(self.output)
         self.output = Path(folder)
         self.store.add_root(self.output)
         self.location.setText(str(self.output))
         self.refresh()
+
+    def set_storage_busy(self, busy):
+        self.storage_busy = self.model.paused = busy
+        self.grid.setEnabled(not busy)
+        self.choose_button.setEnabled(not busy)
+        self.refresh_button.setEnabled(not busy and not self.scanning)
+        self.delete_button.setEnabled(not busy and self.grid.currentIndex().isValid())
+        self.watcher.blockSignals(busy)
+        if busy:
+            self.periodic.stop()
+            self.debounce.stop()
+        elif not self.closing:
+            self.periodic.start()
 
     def context_menu(self, point):
         index = self.grid.indexAt(point)
@@ -448,21 +491,52 @@ class LibraryPage(QWidget):
         self.reload()
         self.notice.setText("已移除下载记录，本地文件保留。")
 
+    def delete_selected(self):
+        item = self.grid.currentIndex().data(MediaModel.Row)
+        if item:
+            self.delete_file(item)
+
     def delete_file(self, item):
+        if self.storage_busy or not item:
+            return False
+        if not self.can_delete():
+            self.notice.setText("请先完成目录迁移或旧文件清理，再删除作品。")
+            return False
         dialog = QMessageBox(self)
         dialog.setWindowTitle("删除本地文件")
         dialog.setTextFormat(Qt.PlainText)
-        dialog.setText("确定删除本地文件？此操作不会只移除记录。\n\n" + item["title"])
+        kind = "整个图文作品及其中的图片和配乐" if item["kind"] == "gallery" else "此视频"
+        dialog.setText("删除" + kind + "？本地文件也会删除。\n\n" + item["title"])
         dialog.setStandardButtons(QMessageBox.Yes | QMessageBox.Cancel)
         dialog.setDefaultButton(QMessageBox.Cancel)
         if dialog.exec() != QMessageBox.Yes:
-            return
-        try:
-            self.store.delete_files(item["id"])
-            self.reload()
-        except OSError as error:
-            self.notice.setText("文件未能删除，可能正被播放器占用：" + str(error))
-            self.refresh()
+            return False
+        self.before_delete.emit(item)
+        def remove():
+            try:
+                self.store.delete_files(item["id"])
+                self.notice.setText("已删除。")
+            except OSError as error:
+                self.notice.setText("文件未能删除，可能正被播放器占用：" + str(error))
+        self.after_media_idle(remove)
+        return True
+
+    def after_media_idle(self, action):
+        self.set_storage_busy(True)
+        self.notice.setText("正在准备删除…")
+        def perform():
+            if self.closing:
+                return
+            if self.pool.active:
+                QTimer.singleShot(50, perform)
+                return
+            try:
+                action()
+            finally:
+                self.set_storage_busy(False)
+                self.reload()
+                self.refresh()
+        perform()
 
     def shutdown(self):
         self.closing = self.model.closing = True
