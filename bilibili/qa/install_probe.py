@@ -1,4 +1,5 @@
-"""Real Inno install + frozen helper + restart, over an isolated v1.0.4 copy."""
+"""Real Inno install + frozen helper + restart, over an isolated released build."""
+import argparse
 import hashlib
 import json
 import os
@@ -6,10 +7,16 @@ from pathlib import Path
 import shutil
 import sqlite3
 import subprocess
+import sys
 import time
 import uuid
 
 root = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(root))
+from app_version import APP_VERSION
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("--baseline", type=Path, default=root / "dist/VideoDownloader")
+args = parser.parse_args()
 work = root / "build" / ("v2-upgrade-" + str(time.time_ns()))
 app = work / "application"
 data = work / "preferences/LocalVideoDownloader"
@@ -17,15 +24,17 @@ cache = data / "updates"
 output = work / "existing-videos"
 for folder in (cache, output, data / "WebProfile"):
     folder.mkdir(parents=True, exist_ok=True)
-baseline = root / "dist/VideoDownloader"
-assert json.loads((baseline / "_internal/version.json").read_text())["version"] == "1.0.4"
+baseline = args.baseline.resolve()
+assert baseline.is_relative_to(root.resolve())
+baseline_version = json.loads((baseline / "_internal/version.json").read_text())["version"]
+assert baseline_version in {"1.0.4", "2.0.0"}, baseline_version
 shutil.copytree(baseline, app)
 fixture = root / "build/v2-fixtures/sample.mp4"
 history = output / "原有的视频.mp4"
 shutil.copy2(fixture, history)
 video_hash = hashlib.sha256(history.read_bytes()).hexdigest()
 settings = {"output": str(output), "auto_update": False, "auto_login": False, "browser_source": "chrome:Default",
-            "migration_fixture": "preserve-v1.0.4"}
+            "migration_fixture": "preserve-v" + baseline_version}
 (data / "settings.json").write_text(json.dumps(settings), encoding="utf-8")
 (data / "WebProfile/preserve-marker.txt").write_text("existing profile is not removed", encoding="utf-8")
 installer = cache / "verified-qa-installer.exe"
@@ -33,7 +42,7 @@ shutil.copy2(root / "build/v2-qa-installer/VideoDownloader-Windows-Setup.exe", i
 helper = cache / "independent-helper.exe"
 shutil.copy2(root / "dist/v2/VideoDownloader/update-helper.exe", helper)
 nonce = uuid.uuid4().hex
-plan = {"product": "LocalVideoDownloader", "schema": 1, "version": "2.0.0", "previous_version": "1.0.4",
+plan = {"product": "LocalVideoDownloader", "schema": 1, "version": APP_VERSION, "previous_version": baseline_version,
         "nonce": nonce, "app_dir": str(app), "data_dir": str(data), "cache_dir": str(cache), "old_pid": 0,
         "installer": str(installer), "sha256": hashlib.file_digest(installer.open("rb"), "sha256").hexdigest(),
         "size": installer.stat().st_size, "handshake": str(cache / "new-ready.json"),
@@ -54,7 +63,7 @@ result = json.loads((data / "updates/install-result.json").read_text(encoding="u
 ready = json.loads((cache / "new-ready.json").read_text(encoding="utf-8")) if (cache / "new-ready.json").exists() else {}
 try:
     assert code == 0 and result["success"], result
-    assert ready["version"] == "2.0.0" and ready["nonce"] == nonce and ready["page"] == 0, ready
+    assert ready["version"] == APP_VERSION and ready["nonce"] == nonce and ready["page"] == 0, ready
     assert ready["output"] == str(output), ready
     assert hashlib.sha256(history.read_bytes()).hexdigest() == video_hash
     assert json.loads((data / "settings.json").read_text(encoding="utf-8")) == settings
@@ -71,8 +80,8 @@ try:
             break
         time.sleep(.1)
     assert any(row[1] == str(history) for row in records), records
-    value = {"passed": True, "real_installer": True, "real_frozen_helper": True, "isolated_baseline": "1.0.4",
-             "installed": "2.0.0", "restarted": ready, "preserved_settings": True, "preserved_video_sha256": video_hash,
+    value = {"passed": True, "real_installer": True, "real_frozen_helper": True, "isolated_baseline": baseline_version,
+             "installed": APP_VERSION, "restarted": ready, "preserved_settings": True, "preserved_video_sha256": video_hash,
              "preserved_login_profile": True, "historical_video_imported": True,
              "elapsed": round(time.monotonic() - started, 2), "installer_result": result}
     (work / "report.json").write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")

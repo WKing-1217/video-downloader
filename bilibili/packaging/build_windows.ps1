@@ -9,6 +9,7 @@ try {
     $compiler = 'D:\Program\Inno Setup 6\ISCC.exe'
     if (!(Test-Path -LiteralPath $compiler)) { $compiler = (Get-Command ISCC.exe -ErrorAction Stop).Source }
     $releaseVersion = (Get-Content -LiteralPath (Join-Path $appRoot 'version.json') -Raw | ConvertFrom-Json).version
-    & $compiler ("/DAppVersion=" + $releaseVersion) (Join-Path $PSScriptRoot 'installer.iss')
+    $releaseDirectory = Join-Path (Split-Path $appRoot -Parent) ("release\v" + $releaseVersion)
+    & $compiler ("/DAppVersion=" + $releaseVersion) ("/DReleaseDir=" + $releaseDirectory) (Join-Path $PSScriptRoot 'installer.iss')
     if ($LASTEXITCODE) { throw 'Windows installer build failed.' }
 } finally { Pop-Location }

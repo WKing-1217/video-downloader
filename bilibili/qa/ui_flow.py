@@ -81,6 +81,7 @@ def check_ui(web_session=False, sample="", expected=295, min_width=1920, min_hei
     def paste():
         app.clipboard().setText(sample)
         window.url.paste()
+        window.download_page.submit.click()
     QTimer.singleShot(100, paste)
     app.exec()
     print(json.dumps({**state, "directory": str(work)}, ensure_ascii=False, indent=2))

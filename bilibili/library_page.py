@@ -9,15 +9,15 @@ import subprocess
 import threading
 
 from PySide6.QtCore import QAbstractListModel, QEvent, QFileSystemWatcher, QModelIndex, QPoint, QRect, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QDesktopServices, QFont, QPainter, QPainterPath, QPixmap
+from PySide6.QtGui import QColor, QDesktopServices, QFont, QPainter, QPainterPath, QPixmap, QPen
 from PySide6.QtCore import QUrl
 from PySide6.QtWidgets import (QComboBox, QFileDialog, QHBoxLayout, QLineEdit, QListView, QMenu,
-                              QMessageBox, QPushButton, QStyledItemDelegate, QVBoxLayout, QWidget)
+                              QMessageBox, QPushButton, QStackedWidget, QStyle, QStyledItemDelegate, QVBoxLayout, QWidget)
 from async_jobs import BackgroundPool
 from media_library import gallery_assets
 from runtime_paths import data_dir, tool
-from ui_theme import COLORS, METRICS
-from ui_widgets import clock_text, size_text, text_label, panel
+from ui_theme import COLORS, METRICS, SPACE, icon
+from ui_widgets import EmptyState, LocationBar, clock_text, size_text, text_label
 
 
 def thumbnail_and_metadata(item, cache):
@@ -67,6 +67,7 @@ def thumbnail_and_metadata(item, cache):
 
 class MediaModel(QAbstractListModel):
     Row = Qt.UserRole + 1
+    record_changed = Signal(int, object)
 
     def __init__(self, store, pool, parent=None):
         super().__init__(parent)
@@ -139,6 +140,7 @@ class MediaModel(QAbstractListModel):
         for row, item in enumerate(self.rows):
             if item["id"] == identifier:
                 self.dataChanged.emit(self.index(row), self.index(row))
+        self.record_changed.emit(identifier, values)
 
 
 class MediaDelegate(QStyledItemDelegate):
@@ -153,48 +155,75 @@ class MediaDelegate(QStyledItemDelegate):
             return
         painter.save()
         painter.setRenderHint(QPainter.Antialiasing)
-        card = option.rect.adjusted(6, 6, -6, -8)
-        painter.setPen(QColor(COLORS["border"]))
-        painter.setBrush(QColor("white"))
-        painter.drawRoundedRect(card, 10, 10)
+        painter.setRenderHint(QPainter.SmoothPixmapTransform)
+        inset_size = METRICS["card_inset"]
+        card = option.rect.adjusted(inset_size, inset_size, -inset_size, -SPACE["sm"])
+        selected = bool(option.state & (QStyle.State_Selected | QStyle.State_HasFocus))
+        hovered = bool(option.state & QStyle.State_MouseOver)
+        painter.setPen(QPen(QColor(COLORS["accent"] if selected else COLORS["border"]), 2 if selected else 1))
+        painter.setBrush(QColor(COLORS["surface"]))
+        radius = METRICS["radius"]
+        painter.drawRoundedRect(card, radius, radius)
         picture = QRect(card.left(), card.top(), card.width(), round(card.width() * 9 / 16))
         clip = QPainterPath()
-        clip.addRoundedRect(card, 10, 10)
+        clip.addRoundedRect(card.adjusted(1, 1, -1, -1), radius, radius)
         painter.setClipPath(clip)
         pixmap = index.model().thumbnail(item)
         if pixmap and not pixmap.isNull():
             painter.drawPixmap(picture, pixmap)
         else:
-            painter.fillRect(picture, QColor("#e8ebf2"))
-            painter.setPen(QColor(COLORS["muted"]))
-            painter.setFont(QFont("Segoe UI", 16))
-            painter.drawText(picture, Qt.AlignCenter, "▷" if item["kind"] == "video" else "▧")
+            painter.fillRect(picture, QColor(COLORS["thumb"]))
+            placeholder = QRect(0, 0, METRICS["badge_icon"], METRICS["badge_icon"])
+            placeholder.moveCenter(picture.center())
+            icon("play" if item["kind"] == "video" else "nav-library", COLORS["muted"]).paint(painter, placeholder)
+        font = QFont("Segoe UI")
+        font.setPixelSize(METRICS["caption"])
+        font.setWeight(QFont.Medium)
+        painter.setFont(font)
+        duration = clock_text(item["duration"]) if item["duration"] else "图文" if item["kind"] == "gallery" else "视频"
+        badge_width = painter.fontMetrics().horizontalAdvance(duration) + SPACE["lg"]
+        badge = QRect(picture.right() - badge_width - SPACE["sm"], picture.bottom() - 30, badge_width, SPACE["xxl"])
+        overlay = QColor(COLORS["overlay"])
+        overlay.setAlpha(210)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(overlay)
+        painter.drawRoundedRect(badge, SPACE["xs"], SPACE["xs"])
+        painter.setPen(QColor(COLORS["white"]))
+        painter.drawText(badge, Qt.AlignCenter, duration)
+        if hovered or selected:
+            play = QRect(0, 0, 36, 36)
+            play.moveCenter(picture.center())
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor(COLORS["surface"]))
+            painter.drawEllipse(play)
+            icon("play", COLORS["accent"]).paint(painter, play.adjusted(8, 8, -8, -8))
         painter.setClipping(False)
-        inset = card.adjusted(12, picture.height() + 10, -12, -10)
+        inset = card.adjusted(SPACE["md"], picture.height() + SPACE["sm"], -SPACE["md"], -SPACE["sm"])
         painter.setPen(QColor(COLORS["text"]))
         font = QFont("Microsoft YaHei UI")
-        font.setPixelSize(14)
-        font.setWeight(QFont.DemiBold)
+        font.setPixelSize(METRICS["body"])
+        font.setWeight(QFont.Medium)
         painter.setFont(font)
         metrics = painter.fontMetrics()
         text = metrics.elidedText(item["title"], Qt.ElideRight, inset.width())
-        painter.drawText(QRect(inset.left(), inset.top(), inset.width(), 23), Qt.AlignVCenter, text)
-        font.setPixelSize(12)
+        painter.drawText(QRect(inset.left(), inset.top(), inset.width(), SPACE["xxl"]), Qt.AlignVCenter, text)
+        font.setPixelSize(METRICS["caption"])
         font.setWeight(QFont.Normal)
         painter.setFont(font)
         painter.setPen(QColor(COLORS["muted"]))
-        description = (clock_text(item["duration"]) if item["duration"] else "图文作品" if item["kind"] == "gallery" else "读取信息中")
+        platform = json.loads(item["metadata"]).get("platform", "")
+        description = {"bilibili": "Bilibili", "douyin": "抖音", "x": "X"}.get(platform, "图文作品" if item["kind"] == "gallery" else "本地视频")
         if item["state"] == "missing":
             description = "文件已移动或删除"
             painter.setPen(QColor(COLORS["danger"]))
         elif item["state"] == "unreadable":
             description = "无法读取，点击查看原因"
             painter.setPen(QColor(COLORS["danger"]))
-        painter.drawText(QRect(inset.left(), inset.top() + 27, inset.width(), 20), Qt.AlignVCenter,
-                         description + " · " + size_text(item["size"]))
+        painter.drawText(QRect(inset.left(), inset.top() + 28, inset.width(), SPACE["xl"]), Qt.AlignVCenter,
+                         painter.fontMetrics().elidedText(description + " · " + size_text(item["size"]), Qt.ElideRight, inset.width()))
         painter.setPen(QColor(COLORS["muted"]))
-        painter.drawText(QRect(inset.left(), inset.top() + 48, inset.width(), 19), Qt.AlignVCenter,
-                         datetime.fromtimestamp(item["completed"]).strftime("%Y-%m-%d %H:%M"))
+        painter.drawText(QRect(inset.left(), inset.top() + 50, inset.width(), SPACE["xl"]), Qt.AlignVCenter,
+                         datetime.fromtimestamp(item["completed"]).strftime("%Y.%m.%d  %H:%M"))
         painter.restore()
 
 
@@ -230,13 +259,14 @@ class MediaGrid(QListView):
         # Keep enough space for a scrollbar even while a hidden page's layout
         # still reports its previous viewport width.
         cell = (width - METRICS["gap"]) // columns
-        size = QSize(cell, round((cell - 12) * 9 / 16) + 112)
+        size = QSize(cell, round((cell - METRICS["card_inset"] * 2) * 9 / 16) + METRICS["card_footer"])
         if self.gridSize() != size:
             self.setGridSize(size)
 
 
 class LibraryPage(QWidget):
     open_requested = Signal(object)
+    download_requested = Signal()
     output_changed = Signal(str)
     refreshed = Signal(object)
     log = Signal(str)
@@ -250,16 +280,21 @@ class LibraryPage(QWidget):
         self.closing = False
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(14)
+        layout.setSpacing(SPACE["lg"])
         toolbar = QHBoxLayout()
+        toolbar.setSpacing(SPACE["md"])
         self.search = QLineEdit()
+        self.search.setObjectName("searchInput")
         self.search.setPlaceholderText("搜索视频名称")
+        self.search.setAccessibleName("搜索视频名称")
+        self.search.addAction(icon("search", COLORS["muted"]), QLineEdit.LeadingPosition)
         self.search.setClearButtonEnabled(True)
         toolbar.addWidget(self.search, 1)
         self.sort = QComboBox()
+        self.sort.setAccessibleName("按下载时间排序")
         self.sort.addItems(["最近下载优先", "最早下载优先"])
         toolbar.addWidget(self.sort)
-        self.refresh_button = QPushButton("刷新")
+        self.refresh_button = QPushButton(icon("nav-update", COLORS["muted"]), "刷新")
         self.refresh_button.clicked.connect(self.refresh)
         toolbar.addWidget(self.refresh_button)
         layout.addLayout(toolbar)
@@ -268,6 +303,8 @@ class LibraryPage(QWidget):
         self.model = MediaModel(store, self.pool, self)
         self.grid = MediaGrid()
         self.grid.setObjectName("libraryGrid")
+        self.grid.setAccessibleName("作品列表，按回车打开，右键管理文件")
+        self.grid.setMouseTracking(True)
         self.grid.setViewMode(QListView.IconMode)
         self.grid.setResizeMode(QListView.Adjust)
         self.grid.setMovement(QListView.Static)
@@ -279,23 +316,21 @@ class LibraryPage(QWidget):
         self.grid.open_requested.connect(self.open_requested)
         self.grid.setContextMenuPolicy(Qt.CustomContextMenu)
         self.grid.customContextMenuRequested.connect(self.context_menu)
-        layout.addWidget(self.grid, 1)
+        self.empty = EmptyState("暂无视频", "", action="下载")
+        self.empty.activated.connect(self._empty_action)
+        self.results = QStackedWidget()
+        self.results.addWidget(self.grid)
+        self.results.addWidget(self.empty)
+        layout.addWidget(self.results, 1)
         self.search.textChanged.connect(self.filter)
         self.sort.currentIndexChanged.connect(self.filter)
-        footer, body = panel()
-        body.setContentsMargins(14, 12, 14, 12)
-        row = QHBoxLayout()
-        self.location = text_label(str(self.output), role="muted", wrap=True)
-        self.location.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        row.addWidget(self.location, 1)
-        self.folder_button = QPushButton("打开视频文件夹")
-        self.folder_button.clicked.connect(self.open_folder)
-        row.addWidget(self.folder_button)
-        self.choose_button = QPushButton("更改位置")
-        self.choose_button.clicked.connect(self.choose_output)
-        row.addWidget(self.choose_button)
-        body.addLayout(row)
-        layout.addWidget(footer)
+        self.location_bar = LocationBar(self.output)
+        self.location = self.location_bar.location
+        self.folder_button = self.location_bar.folder_button
+        self.choose_button = self.location_bar.choose_button
+        self.location_bar.open_requested.connect(self.open_folder)
+        self.location_bar.change_requested.connect(self.choose_output)
+        layout.addWidget(self.location_bar)
         self.watcher = QFileSystemWatcher(self)
         self.debounce = QTimer(self)
         self.debounce.setSingleShot(True)
@@ -315,12 +350,23 @@ class LibraryPage(QWidget):
 
     def _notice(self):
         missing = sum(item["state"] == "missing" for item in self.model.all_rows)
-        text = f"共 {len(self.model.all_rows)} 个作品" if self.model.all_rows else "还没有视频，粘贴链接下载后会自动出现在这里。"
+        text = f"共 {len(self.model.all_rows)} 个作品"
         if missing:
             text += f"，其中 {missing} 个文件已移动或删除"
         if self.search.text():
             text += f" · 找到 {len(self.model.rows)} 个"
         self.notice.setText(text)
+        self.results.setCurrentWidget(self.grid if self.model.rows else self.empty)
+        searching = bool(self.search.text())
+        self.empty.title.setText("未找到视频" if searching else "暂无视频")
+        self.empty.hint.setText("")
+        self.empty.button.setText("清空搜索" if searching else "下载")
+
+    def _empty_action(self):
+        if self.search.text():
+            self.search.clear()
+        else:
+            self.download_requested.emit()
 
     def reload(self):
         if not self.closing:

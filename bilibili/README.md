@@ -1,4 +1,4 @@
-# 视频下载器 Windows v2.0
+# 视频下载器 Windows v2.1.0
 
 原生 Qt / PySide6 桌面应用，支持 Bilibili、抖音、X。自动选择当前权限下最高可用画质与音质，完成检查后入库；保留抖音图文、实况与配乐。Android 客户端本次保持 v1.0.4。
 
@@ -6,13 +6,15 @@
 
 Windows 10 / 11 x64 双击项目根目录 `release/VideoDownloader-Windows-Setup.exe`，安装到原目录即可升级。安装包内含运行环境、FFmpeg、Qt 播放和网页登录组件，无需安装 Python。
 
-三个页面：
+Windows v2.1.0 使用黑白简约界面和全新品牌图标。可双击同目录的“预览新版UI.bat”打开隔离的设计预览，细节见 [UI 验收记录](UI_REVIEW.md)。
 
-- **下载**：在输入框 Ctrl+V、右键粘贴或点击粘贴，立即验证并排队下载。手动输入可按回车。不会监听系统剪贴板；重复链接不会重复创建任务。
+左侧默认是窄图标栏，点击顶部 Logo 展开完整侧栏，可查看导航和最近作品，顶部按钮可收起。搜索入口或 Ctrl+K 打开独立搜索浮层，不切换当前页面；底部进入可调整大小的账号设置窗口。
+
+- **下载**：在输入框 Ctrl+V、右键粘贴或点击粘贴按钮填入链接，点击右侧黑色箭头或按回车验证并排队下载。不会监听系统剪贴板；重复链接不会重复创建任务。
 - **我的视频**：自动扫描原保存目录，显示缩略图、时长、大小与完成时间。支持搜索、排序和内置播放。删除记录保留文件；删除本地文件需要确认。
 - **软件更新**：后台检查真实 GitHub Releases。无新版保持安静，发现新版可暂不更新或进入第三页下载；显示真实字节、速度与剩余时间。安装前确认退出，由独立助手安装、验证启动并在失败时恢复。
 
-右上角设置保留浏览器登录扫描、登录来源、网页登录、更新偏好与诊断日志。浏览器加密保护或文件占用时如实显示，可使用程序内网页登录。登录信息按站点隔离，不写入视频信息或日志。
+左下角设置保留浏览器登录扫描、登录来源、网页登录、更新偏好与诊断日志。浏览器加密保护或文件占用时如实显示，可使用程序内网页登录。登录信息按站点隔离，不写入视频信息或日志。
 
 视频库底部可打开或更改保存位置。修改只影响后续任务，旧目录仍纳入库，不自动移动文件。默认位置为用户“视频 / 视频下载器 / video”；源码运行默认使用项目同级 video，已有设置优先。
 
@@ -34,7 +36,7 @@ bilibili/.venv/Scripts/python.exe -m pip install -r bilibili/requirements.txt py
 bilibili/.venv/Scripts/pythonw.exe bilibili/app.py
 ```
 
-准备 FFmpeg / ffprobe 和 Inno Setup 6，再运行 `bilibili/packaging/build_windows.ps1`。独立程序在 `bilibili/dist/v2/VideoDownloader`，初始安装包在 `release/v2.0.0`。版本、Android 独立版本及实际发布仓库在 `bilibili/version.json`。
+准备 FFmpeg / ffprobe 和 Inno Setup 6，再运行 `bilibili/packaging/build_windows.ps1`。独立程序在 `bilibili/dist/v2/VideoDownloader`，安装包写入对应的 `release/v版本号` 目录。版本、Android 独立版本及实际发布仓库在 `bilibili/version.json`。
 
 测试命令、修改清单、真实下载/安装验收和未覆盖场景见 [v2 交付记录](V2_DELIVERY.md)。图形测试的受控媒体先用 `python bilibili/qa/prepare_fixture.py` 生成，不使用正式 GitHub 发布做测试。
 

@@ -83,4 +83,5 @@ def verify(app, window, target):
         def paste():
             app.clipboard().setText(link)
             window.url.paste()
+            window.download_page.submit.click()
         QTimer.singleShot(0, paste)

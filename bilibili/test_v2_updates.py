@@ -128,7 +128,7 @@ class TransferTests(unittest.TestCase):
         self.temp.cleanup()
 
     def test_actual_release_notes_and_digest_take_priority_over_manifest(self):
-        info = self.client.check()
+        info = self.client.check(current_version="2.0.0")
         self.assertTrue(info.available)
         self.assertIn("真实 Release Notes", info.notes)
         self.assertEqual(info.sha256, DIGEST)

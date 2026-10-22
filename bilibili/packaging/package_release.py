@@ -24,7 +24,7 @@ def source_files():
     paths = set()
     for path in (ROOT / "bilibili").iterdir():
         if path.is_file() and (path.suffix in {".py", ".bat", ".ps1"} or path.name in {
-                "README.md", "DESIGN.md", "V2_PLAN.md", "V2_DELIVERY.md", "requirements.txt", ".gitignore", "version.json"}):
+                "README.md", "DESIGN.md", "UI_REVIEW.md", "V2_PLAN.md", "V2_DELIVERY.md", "requirements.txt", ".gitignore", "version.json"}):
             paths.add(path)
     for folder in ("bilibili/assets", "bilibili/packaging", "bilibili/qa", "android/package/src", "android/package/res"):
         paths.update(path for path in (ROOT / folder).rglob("*")
@@ -33,7 +33,7 @@ def source_files():
         if path.is_file() and (path.suffix in {".cpp", ".h", ".qml", ".py", ".md"}
                               or path.name in {"CMakeLists.txt", "LICENSE", ".gitignore"}):
             paths.add(path)
-    paths.update(ROOT / name for name in ("PRODUCT.md", "android/package/build.gradle", "android/package/AndroidManifest.xml"))
+    paths.update(ROOT / name for name in ("AGENTS.md", "PRODUCT.md", "release/RELEASE_NOTES.md", "android/package/build.gradle", "android/package/AndroidManifest.xml"))
     for path in paths:
         relative = path.relative_to(ROOT)
         if any(part in {"signing", "build", "dist", ".venv", "WebProfile"} for part in relative.parts):
@@ -45,7 +45,7 @@ def source_files():
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--windows", type=Path, default=ROOT / "release/v2.0.0/VideoDownloader-Windows-Setup.exe")
+    parser.add_argument("--windows", type=Path, default=ROOT / f"release/v{APP_VERSION}/VideoDownloader-Windows-Setup.exe")
     args = parser.parse_args()
     release = ROOT / "release"
     windows = release / "VideoDownloader-Windows-Setup.exe"

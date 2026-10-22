@@ -66,6 +66,7 @@ def api(client, method, path, *, acceptable=(200, 201, 204), **kwargs):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("action", choices=("whoami", "create", "publish"))
+    parser.add_argument("--target", help="Exact tested source commit to tag for a new release")
     args = parser.parse_args()
     with session() as client:
         user = api(client, "GET", "/user")
@@ -99,8 +100,10 @@ def main():
                     + "\n\nWindows 下载 VideoDownloader-Windows-Setup.exe；Android 下载 VideoDownloader-Android.apk。"
                     + "\n\n安装到原目录即可升级。使用方法和构建说明见仓库 README。")
         if response.status_code == 404:
-            release = api(client, "POST", f"/repos/{REPOSITORY}/releases", json={"tag_name": tag,
-                          "name": "视频下载器 " + APP_VERSION, "body": body, "draft": True})
+            definition = {"tag_name": tag, "name": "视频下载器 " + APP_VERSION, "body": body, "draft": True}
+            if args.target:
+                definition["target_commitish"] = args.target
+            release = api(client, "POST", f"/repos/{REPOSITORY}/releases", json=definition)
         elif response.status_code == 200:
             release = response.json()
         else:

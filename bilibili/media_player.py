@@ -25,10 +25,11 @@ if os.name == "nt":
 from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QColor, QDesktopServices, QKeySequence, QPainter, QPixmap, QShortcut, QTransform
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer, QVideoSink
-from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QListWidget, QPushButton, QSlider, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton, QSlider, QVBoxLayout, QWidget
 
 from media_library import gallery_assets
-from ui_widgets import clock_text, text_label
+from ui_theme import COLORS, METRICS, SPACE, icon
+from ui_widgets import ElidedLabel, clock_text, text_label
 
 
 class VideoSurface(QWidget):
@@ -58,7 +59,7 @@ class VideoSurface(QWidget):
 
     def paintEvent(self, event):
         painter = QPainter(self)
-        painter.fillRect(self.rect(), QColor("#11151e"))
+        painter.fillRect(self.rect(), QColor(COLORS["video"]))
         if self.image is not None:
             size = self.image.size().scaled(self.size(), Qt.KeepAspectRatio)
             target = self.rect()
@@ -78,11 +79,14 @@ class PlayerDialog(QDialog):
         self.setAttribute(Qt.WA_DeleteOnClose)
         self._was_maximized = False
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(12)
+        layout.setContentsMargins(SPACE["xl"], SPACE["lg"], SPACE["xl"], SPACE["lg"])
+        layout.setSpacing(SPACE["md"])
+        heading = QHBoxLayout()
+        heading.addWidget(ElidedLabel(title or self.path.stem, role="taskTitle"), 1)
+        heading.addWidget(text_label("本地播放", role="caption"))
+        layout.addLayout(heading)
         self.video = VideoSurface()
         self.video.setMinimumHeight(210)
-        self.video.setStyleSheet("background: #11151e;")
         layout.addWidget(self.video, 1)
         self.error_label = text_label("", role="error", wrap=True)
         self.error_label.hide()
@@ -93,9 +97,11 @@ class PlayerDialog(QDialog):
         layout.addWidget(self.seek)
         controls = QHBoxLayout()
         self.play_button = QPushButton("暂停")
+        self.play_button.setIcon(icon("pause", COLORS["text"]))
         self.play_button.clicked.connect(self.toggle_play)
         controls.addWidget(self.play_button)
         self.time_label = text_label("00:00 / 00:00")
+        self.time_label.setObjectName("muted")
         controls.addWidget(self.time_label)
         controls.addStretch()
         controls.addWidget(text_label("音量"))
@@ -106,6 +112,7 @@ class PlayerDialog(QDialog):
         self.volume.setAccessibleName("播放音量")
         controls.addWidget(self.volume)
         self.fullscreen_button = QPushButton("全屏")
+        self.fullscreen_button.setIcon(icon("fullscreen", COLORS["text"]))
         self.fullscreen_button.clicked.connect(self.toggle_fullscreen)
         controls.addWidget(self.fullscreen_button)
         layout.addLayout(controls)
@@ -113,6 +120,7 @@ class PlayerDialog(QDialog):
         fallback.addWidget(text_label("本地播放 · 空格暂停 · F11 全屏", role="muted"))
         fallback.addStretch()
         self.external = QPushButton("使用默认播放器打开")
+        self.external.setObjectName("link")
         self.external.clicked.connect(self.open_external)
         fallback.addWidget(self.external)
         layout.addLayout(fallback)
@@ -154,6 +162,7 @@ class PlayerDialog(QDialog):
 
     def _state(self, state):
         self.play_button.setText("暂停" if state == QMediaPlayer.PlayingState else "播放")
+        self.play_button.setIcon(icon("pause" if state == QMediaPlayer.PlayingState else "play", COLORS["text"]))
 
     def _error(self, error, message=""):
         self.error_label.setText("软件内播放失败：" + (message or self.player.errorString() or "当前解码组件无法播放此文件。")
@@ -199,19 +208,36 @@ class GalleryDialog(QDialog):
         self.resize(900, 650)
         self.setAttribute(Qt.WA_DeleteOnClose)
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(SPACE["xl"], SPACE["xl"], SPACE["xl"], SPACE["xl"])
+        layout.setSpacing(SPACE["lg"])
+        self.assets = gallery_assets(item["path"], json.loads(item["metadata"]))
+        heading = QHBoxLayout()
+        heading.addWidget(ElidedLabel(item["title"], role="taskTitle"), 1)
+        counts = {kind: sum(asset["kind"] == kind for asset in self.assets) for kind in ("image", "live_photo", "music")}
+        summary = " · ".join(f"{counts[kind]} {unit}" for kind, unit in (("image", "张图片"), ("live_photo", "段实况"), ("music", "首配乐")) if counts[kind])
+        heading.addWidget(text_label(summary, role="caption"))
+        layout.addLayout(heading)
         self.preview = QLabel()
+        self.preview.setObjectName("galleryPreview")
         self.preview.setAlignment(Qt.AlignCenter)
         self.preview.setMinimumSize(320, 260)
         layout.addWidget(self.preview, 1)
-        self.assets = gallery_assets(item["path"], json.loads(item["metadata"]))
         self.list = QListWidget()
+        self.list.setObjectName("assetList")
+        self.list.setAccessibleName("作品内的图片、实况视频和配乐")
         self.list.setMaximumHeight(140)
         kinds = {"image": "图片", "live_photo": "实况视频", "music": "配乐"}
+        counters = {}
         for asset in self.assets:
-            self.list.addItem(kinds.get(asset["kind"], "文件") + " · " + Path(asset["path"]).name)
+            kind = asset["kind"]
+            counters[kind] = counters.get(kind, 0) + 1
+            row = QListWidgetItem(f"{kinds.get(kind, '文件')} {counters[kind]:02d}")
+            row.setToolTip(Path(asset["path"]).name)
+            self.list.addItem(row)
         self.list.currentRowChanged.connect(self.select)
         layout.addWidget(self.list)
         self.open_button = QPushButton("在软件内播放选中媒体")
+        self.open_button.setObjectName("primary")
         self.open_button.clicked.connect(self.play_selected)
         layout.addWidget(self.open_button)
         self.list.setCurrentRow(0)

@@ -1,4 +1,5 @@
 """Launch only our own built GUI, with isolated data and no installed Python/FFmpeg on PATH."""
+import argparse
 import json
 import os
 from pathlib import Path
@@ -7,10 +8,16 @@ import time
 import pefile
 
 root = Path(__file__).resolve().parents[1]
-binary = root / "dist/v2/VideoDownloader/VideoDownloader.exe"
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("--url", default="https://www.bilibili.com/video/BV1yUFPzKEC7")
+parser.add_argument("--binary", type=Path, default=root / "dist/v2/VideoDownloader/VideoDownloader.exe")
+args = parser.parse_args()
+binary = args.binary.resolve()
 assert binary.resolve().is_relative_to(root.resolve())
 assert pefile.PE(str(binary)).OPTIONAL_HEADER.Subsystem == 2
-work = root / "build" / ("v2-packaged-live-" + str(time.time_ns()))
+# Match a normal output-directory depth; long fixture prefixes alone can exceed
+# Windows' legacy 260-character limit with real titles and format identifiers.
+work = root / "build" / ("pkg-" + format(time.time_ns(), "x"))
 data = work / "preferences/LocalVideoDownloader"
 data.mkdir(parents=True)
 environment = os.environ.copy()
@@ -20,7 +27,7 @@ environment.update(LOCALAPPDATA=str(data.parent), VIDEO_DOWNLOADER_OUTPUT=str(wo
                                                 "output": str(work / "video")}), encoding="utf-8")
 report = work / "report.json"
 with (work / "process.log").open("wb") as log:
-    process = subprocess.Popen([str(binary), "https://www.bilibili.com/video/BV1yUFPzKEC7", "--verify-install", str(report)],
+    process = subprocess.Popen([str(binary), args.url, "--verify-install", str(report)],
                                cwd=binary.parent, env=environment, stdout=log, stderr=log)
     print(json.dumps({"pid": process.pid, "work": str(work), "subsystem": "Windows GUI"}), flush=True)
     try:

@@ -19,7 +19,7 @@ from PySide6.QtCore import QTimer
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 from app import DownloadWindow
-from app_version import REPOSITORY
+from app_version import APP_VERSION, REPOSITORY
 from desktop_verify import prepare_fonts
 from test_v2_updates import ReleaseHandler, PAYLOAD
 from http.server import ThreadingHTTPServer
@@ -29,7 +29,10 @@ server = ThreadingHTTPServer(("127.0.0.1", 0), ReleaseHandler)
 thread = threading.Thread(target=server.serve_forever, daemon=True)
 thread.start()
 base = f"http://127.0.0.1:{server.server_port}"
-ReleaseHandler.version = "2.0.0"
+ReleaseHandler.version = APP_VERSION
+major, minor, patch = map(int, APP_VERSION.split("."))
+next_version = f"{major}.{minor + 1}.0"
+later_version = f"{major}.{minor + 2}.0"
 ReleaseHandler.delay = .009
 factory = lambda **kwargs: UpdateClient(manifest_url=base + "/manifest", api_url=base + "/api", allow_loopback=True, **kwargs)
 app = QApplication([])
@@ -60,15 +63,15 @@ try:
     wait(lambda: up.info and not up.busy())
     check("startup_background_check_without_navigation", window.pages.currentIndex() == 0 and beats[0] > 20)
     check("latest_version_is_quiet", up.reminder is None and "已是最新" in window.update_page.status.text())
-    ReleaseHandler.version = "2.1.0"
+    ReleaseHandler.version = next_version
     up.check(manual=False)
     wait(lambda: up.reminder and up.reminder.isVisible() and not up.busy())
     check("new_version_reminder_is_small_and_has_real_notes", up.reminder.width() <= 520 and "真实 Release Notes" in window.update_page.notes.toPlainText())
     up.reminder.later.click()
     check("defer_keeps_main_window_alive", window.isVisible() and not window.closing and window.pages.currentIndex() == 0)
-    ReleaseHandler.version = "2.2.0"
+    ReleaseHandler.version = later_version
     up.check(manual=False)
-    wait(lambda: up.reminder.isVisible() and up.info.version == "2.2.0" and not up.busy())
+    wait(lambda: up.reminder.isVisible() and up.info.version == later_version and not up.busy())
     up.reminder.now.click()
     wait(lambda: up.mode == "downloading" and up.received > 0)
     check("accept_navigates_to_update_page_and_downloads", window.pages.currentIndex() == 2)
