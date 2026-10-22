@@ -2,6 +2,7 @@
 from collections import deque
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import shutil
@@ -12,14 +13,96 @@ import time
 import uuid
 
 from PySide6.QtCore import QObject, QThread, QTimer, QUrl, Qt, Signal
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtGui import QDesktopServices, QTextCursor, QTextCharFormat, QTextFormat, QTextBlockFormat
 from PySide6.QtWidgets import QDialog, QHBoxLayout, QMessageBox, QPushButton, QProgressBar, QScrollArea, QStackedWidget, QTextBrowser, QVBoxLayout, QWidget
 from app_version import APP_VERSION, RELEASE_PAGE, REPOSITORY
 from runtime_paths import APP_DIR, FROZEN, data_dir
-from ui_theme import COLORS, SPACE, icon
+from ui_theme import COLORS, SPACE, UPDATE, icon
 from ui_widgets import EmptyState, IconBadge, clock_text, panel, size_text, text_label
 from update_core import UpdateCancelled, UpdateClient, UpdateError
 from update_agent import PRODUCT, write_json
+
+
+class ReleaseNotes(QTextBrowser):
+    """One typography system; the page owns scrolling, the dialog owns its reader."""
+    def __init__(self, *, expand=False):
+        super().__init__()
+        self.expand = expand
+        self.setObjectName("releaseNotes")
+        self.setOpenExternalLinks(True)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.document().setDocumentMargin(SPACE["xs"])
+        if expand:
+            self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            self.document().documentLayout().documentSizeChanged.connect(self.fit_content)
+
+    def setMarkdown(self, markdown):
+        super().setMarkdown(markdown)
+        block = self.document().begin()
+        while block.isValid():
+            cursor = QTextCursor(block)
+            cursor.setPosition(block.position())
+            cursor.setPosition(block.position() + block.length() - 1, QTextCursor.KeepAnchor)
+            fmt = QTextCharFormat()
+            fmt.setProperty(QTextFormat.FontSizeAdjustment, 0)
+            fmt.setFontPointSize((UPDATE["notes_heading"] if block.blockFormat().headingLevel() else UPDATE["notes_body"]) * 72 / 96)
+            cursor.mergeCharFormat(fmt)
+            cursor = QTextCursor(block)
+            block_format = cursor.blockFormat()
+            block_format.setLineHeight(140, QTextBlockFormat.ProportionalHeight.value)
+            block_format.setBottomMargin(SPACE["sm"])
+            cursor.setBlockFormat(block_format)
+            block = block.next()
+        self.fit_content()
+
+    def fit_content(self, *_):
+        if self.expand:
+            height = max(UPDATE["notes_min_height"], math.ceil(self.document().size().height()) + SPACE["lg"])
+            if self.height() != height:
+                self.setFixedHeight(height)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.fit_content()
+
+
+class TransferEstimate:
+    """Time-based smoothing independent of progress callback frequency."""
+    def __init__(self):
+        self.samples = deque()
+        self.last_render = None
+        self.speed = 0.0
+        self.eta = None
+
+    def add(self, now, done):
+        if self.samples and done < self.samples[-1][1]:
+            self.__init__()
+        self.samples.append((now, done))
+        while len(self.samples) > 2 and now - self.samples[0][0] > 10:
+            self.samples.popleft()
+
+    def read(self, now, total):
+        if not self.samples:
+            return 0, "估算中"
+        if now - self.samples[-1][0] >= 5:
+            self.speed, self.eta, self.last_render = 0, None, None
+            return 0, "等待网络"
+        if self.last_render is not None and now - self.last_render < 1:
+            return self.speed, clock_text(self.eta) if self.eta is not None else "估算中"
+        dt = now - self.last_render if self.last_render is not None else 1
+        self.last_render = now
+        elapsed = now - self.samples[0][0]
+        rate = (self.samples[-1][1] - self.samples[0][1]) / max(elapsed, .001)
+        self.speed = rate if not self.speed else self.speed + (rate - self.speed) * (1 - math.exp(-dt / 8))
+        if total and elapsed >= 3 and self.speed > 0:
+            target = max(0, total - self.samples[-1][1]) / self.speed
+            if self.eta is None:
+                self.eta = target
+            else:
+                baseline = max(0, self.eta - dt)
+                adjustment = (target - baseline) * (1 - math.exp(-dt / 5))
+                self.eta = max(0, baseline + max(-dt, min(3 * dt, adjustment)))
+        return self.speed, clock_text(self.eta) if self.eta is not None else "估算中"
 
 
 class UpdatePage(QWidget):
@@ -29,6 +112,7 @@ class UpdatePage(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(SPACE["lg"])
         scroll = QScrollArea()
+        self.scroll = scroll
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         canvas = QWidget()
@@ -36,7 +120,7 @@ class UpdatePage(QWidget):
         scroll.setWidget(canvas)
         outer.addWidget(scroll, 1)
         layout = QVBoxLayout(canvas)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(1, 1, UPDATE["scroll_gutter"], SPACE["lg"])
         layout.setSpacing(SPACE["lg"])
         version, body = panel()
         heading = QHBoxLayout()
@@ -71,7 +155,7 @@ class UpdatePage(QWidget):
         heading.addStretch()
         heading.addWidget(text_label("官方发布说明", role="caption"))
         notes_body.addLayout(heading)
-        self.notes = QTextBrowser()
+        self.notes = ReleaseNotes(expand=True)
         self.notes.setObjectName("releaseNotes")
         self.notes.setAccessibleName("官方版本更新内容")
         self.notes.setOpenExternalLinks(True)
@@ -82,7 +166,8 @@ class UpdatePage(QWidget):
         self.notes_pages.addWidget(self.notes)
         self.notes.textChanged.connect(lambda: self.notes_pages.setCurrentWidget(self.notes if self.notes.toPlainText().strip() else self.notes_empty))
         notes_body.addWidget(self.notes_pages, 1)
-        layout.addWidget(notes_panel, 1)
+        layout.addWidget(notes_panel)
+        layout.addStretch()
         self.transfer_panel, transfer = panel()
         self.transfer_title = text_label("更新安装包", role="sectionTitle")
         transfer.addWidget(self.transfer_title)
@@ -123,7 +208,7 @@ class UpdatePage(QWidget):
         self.releases_button.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(RELEASE_PAGE)))
         links.addWidget(self.releases_button)
         links.addStretch()
-        outer.addLayout(links)
+        actions.addLayout(links)
 
 
 class UpdateJob(QThread):
@@ -166,7 +251,10 @@ class UpdateReminder(QDialog):
         super().__init__(parent)
         self.setWindowTitle("软件更新")
         self.setModal(True)
-        self.resize(480, 330)
+        self.setSizeGripEnabled(True)
+        screen = self.screen().availableGeometry()
+        self.setMinimumSize(min(UPDATE["dialog_min_width"], screen.width()), min(UPDATE["dialog_min_height"], screen.height() - 80))
+        self.resize(min(UPDATE["dialog_width"], screen.width() - 64), min(UPDATE["dialog_height"], screen.height() - 80))
         layout = QVBoxLayout(self)
         layout.setContentsMargins(SPACE["xxl"], SPACE["xxl"], SPACE["xxl"], SPACE["xxl"])
         layout.setSpacing(SPACE["lg"])
@@ -176,11 +264,11 @@ class UpdateReminder(QDialog):
         row.addWidget(text_label("发现新版本 v" + info.version, role="sectionTitle"), 1)
         layout.addLayout(row)
         layout.addWidget(text_label("当前版本 v" + APP_VERSION, role="muted"))
-        notes = QTextBrowser()
+        notes = ReleaseNotes()
+        self.notes = notes
         notes.setMarkdown(info.notes)
-        notes.setMaximumHeight(145)
         notes.setOpenExternalLinks(True)
-        layout.addWidget(notes)
+        layout.addWidget(notes, 1)
         row = QHBoxLayout()
         row.addStretch()
         self.later = QPushButton("暂不更新")
@@ -233,7 +321,7 @@ class UpdateController(QObject):
         self.mode = "idle"
         self.reminder = None
         self.prompted = set()
-        self.samples = deque(maxlen=40)
+        self.estimate = TransferEstimate()
         self.received = self.total = 0
         self.installing = False
         self.pending_download = False
@@ -325,9 +413,9 @@ class UpdateController(QObject):
         self.page.download_button.hide()
         self.page.cancel_button.show()
         self.page.cancel_button.setEnabled(True)
-        self.samples.clear()
+        self.estimate = TransferEstimate()
         self.received, self.total = 0, self.info.size
-        self.samples.append((time.monotonic(), 0))
+        self.estimate.add(time.monotonic(), 0)
         self.stats_timer.start()
         self.render_stats()
         job = UpdateJob(info=self.info, client_factory=self.client_factory)
@@ -339,9 +427,9 @@ class UpdateController(QObject):
     def progress(self, values):
         done, total, now = values
         if done < self.received:
-            self.samples.clear()
+            self.estimate = TransferEstimate()
         self.received, self.total = done, total
-        self.samples.append((now, done))
+        self.estimate.add(now, done)
         self.page.progress.setRange(0, 100 if total else 0)
         if total:
             self.page.progress.setValue(min(100, round(done * 100 / total)))
@@ -349,18 +437,17 @@ class UpdateController(QObject):
 
     def render_stats(self):
         now = time.monotonic()
-        while len(self.samples) > 2 and now - self.samples[0][0] > 3:
-            self.samples.popleft()
-        speed = max(0, (self.received - self.samples[0][1]) / max(0.001, now - self.samples[0][0])) if self.samples else 0
-        if self.samples and now - self.samples[-1][0] > 2:
-            speed = 0
+        speed, eta = self.estimate.read(now, self.total)
         total = size_text(self.total) if self.total else "大小待确认"
         percent = f"{self.received / self.total:.0%}" if self.total else "大小未知"
-        eta = clock_text((self.total - self.received) / speed) if self.total and speed > 0 else "—"
+        if not self.total:
+            eta = "—"
         self.page.stats.setText(f"{size_text(self.received)} / {total} · {speed / 1024 ** 2:.1f} MB/s · {percent} · 剩余 {eta}")
 
     def ready(self, installer):
         self.installer = Path(installer)
+        self.stats_timer.stop()
+        self.page.stats.setText(f"{size_text(self.received)} / {size_text(self.total)} · 100%")
         self.mode = "ready"
         self.page.progress.setRange(0, 100)
         self.page.progress.setValue(100)
@@ -464,3 +551,4 @@ class UpdateController(QObject):
         self.stats_timer.stop()
         if self.reminder:
             self.reminder.close()
+

@@ -27,7 +27,7 @@ for folder in (cache, output, data / "WebProfile"):
 baseline = args.baseline.resolve()
 assert baseline.is_relative_to(root.resolve())
 baseline_version = json.loads((baseline / "_internal/version.json").read_text())["version"]
-assert baseline_version in {"1.0.4", "2.0.0", "2.1.0"}, baseline_version
+assert baseline_version in {"1.0.4", "2.0.0", "2.1.0", "2.1.1"}, baseline_version
 shutil.copytree(baseline, app)
 fixture = root / "build/v2-fixtures/sample.mp4"
 history = output / "原有的视频.mp4"

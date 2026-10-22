@@ -66,7 +66,7 @@ try:
     ReleaseHandler.version = next_version
     up.check(manual=False)
     wait(lambda: up.reminder and up.reminder.isVisible() and not up.busy())
-    check("new_version_reminder_is_small_and_has_real_notes", up.reminder.width() <= 520 and "真实 Release Notes" in window.update_page.notes.toPlainText())
+    check("new_version_reminder_is_spacious_and_has_real_notes", up.reminder.width() >= 560 and "真实 Release Notes" in window.update_page.notes.toPlainText())
     up.reminder.later.click()
     check("defer_keeps_main_window_alive", window.isVisible() and not window.closing and window.pages.currentIndex() == 0)
     ReleaseHandler.version = later_version

@@ -41,6 +41,9 @@ RAIL = {"width": METRICS["sidebar"], "inset": 12, "top": 16, "bottom": 16,
         "expanded_icon": 20, "recent_limit": 12, "recent_gap": 28, "recent_row": 40,
         "expanded_min": 216, "expanded_max": 420, "content_min": 560, "resize_handle": 4,
         "title_fade": 16, "title_speed": 34, "title_pause_ms": 900, "title_gap": 48, "animation_ms": 33}
+UPDATE = {"dialog_width": 760, "dialog_height": 600, "dialog_min_width": 560,
+          "dialog_min_height": 420, "scroll_gutter": 20, "notes_min_height": 120,
+          "notes_heading": 16, "notes_body": 14}
 DIALOG = {"settings_width": 820, "settings_height": 680, "settings_min_width": 700,
           "settings_min_height": 560, "inset": 32, "search_width": 640, "search_height": 480,
           "search_min_width": 480, "search_min_height": 320, "search_row": 48}
