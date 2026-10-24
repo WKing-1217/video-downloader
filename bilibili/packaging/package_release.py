@@ -24,11 +24,15 @@ def source_files():
     paths = set()
     for path in (ROOT / "bilibili").iterdir():
         if path.is_file() and (path.suffix in {".py", ".bat", ".ps1"} or path.name in {
-                "README.md", "DESIGN.md", "UI_REVIEW.md", "STORAGE_REVIEW.md", "V2_PLAN.md", "V2_DELIVERY.md", "requirements.txt", ".gitignore", "version.json"}):
+                "README.md", "DESIGN.md", "UI_REVIEW.md", "STORAGE_REVIEW.md", "EXPORT_REVIEW.md", "V2_PLAN.md", "V2_DELIVERY.md", "requirements.txt", ".gitignore", "version.json"}):
             paths.add(path)
-    for folder in ("bilibili/assets", "bilibili/packaging", "bilibili/qa", "android/package/src", "android/package/res"):
+    for folder in ("bilibili/assets", "bilibili/packaging", "android/package/src", "android/package/res"):
         paths.update(path for path in (ROOT / folder).rglob("*")
                      if path.is_file() and "__pycache__" not in path.parts)
+    # QA screenshots are generated review artifacts, including abandoned UI
+    # prototypes. Publish the reproducible checks rather than those local files.
+    paths.update(path for path in (ROOT / "bilibili/qa").rglob("*")
+                 if path.is_file() and path.suffix in {".py", ".md"} and "__pycache__" not in path.parts)
     for path in (ROOT / "android").iterdir():
         if path.is_file() and (path.suffix in {".cpp", ".h", ".qml", ".py", ".md"}
                               or path.name in {"CMakeLists.txt", "LICENSE", ".gitignore"}):
@@ -72,8 +76,9 @@ def main():
         raise RuntimeError("APK version does not match version.json")
     with zipfile.ZipFile(android) as archive:
         engine = [name for name in archive.namelist() if name.startswith("assets/engine/")]
-        if not any(name.endswith("/bilibili_adapter.py") for name in engine):
-            raise RuntimeError("APK is missing the latest shared download engine")
+        for required in ("bilibili_adapter.py", "media_export.py", "android_bootstrap.py"):
+            if not any(name.endswith("/" + required) for name in engine):
+                raise RuntimeError("APK is missing the latest shared download engine: " + required)
     if candidate != windows.resolve():
         shutil.copy2(candidate, windows)
     base = f"https://github.com/{REPOSITORY}/releases/download/v{APP_VERSION}/"

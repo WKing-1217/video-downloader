@@ -9,25 +9,26 @@ from PySide6.QtCore import QProcess, QTimer, Qt, QUrl, Signal, QSize
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtGui import QAction, QActionGroup, QColor, QDesktopServices, QFont, QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog,
-    QGraphicsDropShadowEffect, QHBoxLayout, QLineEdit, QListWidgetItem, QMainWindow, QMessageBox,
+    QFileDialog, QGraphicsDropShadowEffect, QHBoxLayout, QLineEdit, QListWidgetItem, QMainWindow, QMessageBox,
     QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QSplitter, QStackedWidget, QToolButton, QVBoxLayout, QWidget, QFrame, QSizePolicy)
 
 from app_version import APP_VERSION
 from async_jobs import BackgroundPool
 from download_service import AccountService, DownloadManager
+from export_preferences import AUDIO_BITRATES, IMAGE_FORMATS, VIDEO_FORMATS, export_preferences
 from library_page import LibraryPage
 from media_library import LibraryStore
 from platform_links import PLATFORMS, download_link
 from runtime_paths import APP_DIR, FROZEN, data_dir, output_dir, read_settings, save_output, save_settings
 from storage_ui import StorageController
 from ui_theme import COLORS, DIALOG, HOME, METRICS, RAIL, ROOT, SPACE, icon, stylesheet
-from ui_navigation import MediaSearchDialog, NavigationSidebar
+from ui_navigation import MediaSearchDialog, NavigationSidebar, NAVIGATION_ITEMS
 from ui_widgets import (ComposerFrame, ElidedLabel, IconBadge, LoginSourceComboBox,
-    LocationBar, PasteLinkEdit, RecentDelegate, RecentList, clock_text, divider, panel, set_tone, size_text, text_label)
+    LocationBar, NoWheelComboBox, PasteLinkEdit, RecentDelegate, RecentList, clock_text, divider, panel, set_tone, size_text, text_label)
 from updater import UpdateController, UpdatePage
 
 
-class DownloadPage(QWidget):
+class TransferPage(QWidget):
     show_library = Signal()
     open_requested = Signal(object)
     submitted = Signal(str)
@@ -35,9 +36,12 @@ class DownloadPage(QWidget):
     login = Signal()
     cancel = Signal()
     clear_queue = Signal()
+    local_audio_requested = Signal()
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, *, audio=False):
         super().__init__(parent)
+        self.audio_mode = audio
+        self.last_task = None
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         self.scroll = QScrollArea()
@@ -58,7 +62,7 @@ class DownloadPage(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(HOME["greeting_gap"])
         layout.addStretch(1)
-        self.greeting = text_label("你好，今天想保存什么？", role="greeting")
+        self.greeting = text_label("提取 MP3" if audio else "你好，今天想保存什么？", role="greeting")
         self.greeting.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.greeting)
         entry = QVBoxLayout()
@@ -77,7 +81,7 @@ class DownloadPage(QWidget):
         self.url = PasteLinkEdit()
         self.url.setObjectName("linkInput")
         self.url.setPlaceholderText("输入链接")
-        self.url.setAccessibleName("视频链接")
+        self.url.setAccessibleName("提取 MP3 的作品链接" if audio else "视频链接")
         self.url.setMinimumWidth(0)
         self.url.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         row.addWidget(self.url, 1)
@@ -95,12 +99,18 @@ class DownloadPage(QWidget):
         self.submit.setIcon(icon("arrow-up", COLORS["white"]))
         self.submit.setIconSize(QSize(METRICS["nav_icon"], METRICS["nav_icon"]))
         self.submit.setFixedSize(HOME["action_size"], HOME["action_size"])
-        self.submit.setToolTip("下载")
-        self.submit.setAccessibleName("开始下载")
+        self.submit.setToolTip("提取 MP3" if audio else "下载")
+        self.submit.setAccessibleName("开始提取 MP3" if audio else "开始下载")
         self.submit.clicked.connect(lambda: self.submitted.emit(self.url.text()))
         self.url.returnPressed.connect(lambda: self.submitted.emit(self.url.text()))
         row.addWidget(self.submit)
         entry.addWidget(self.composer)
+        if audio:
+            self.local_audio = QPushButton("选择本地视频")
+            self.local_audio.setObjectName("link")
+            self.local_audio.setAccessibleName("选择本地视频提取 MP3")
+            self.local_audio.clicked.connect(self.local_audio_requested)
+            entry.addWidget(self.local_audio, 0, Qt.AlignRight)
         self.input_message = text_label("", role="error", wrap=True)
         self.input_message.hide()
         self.url.textEdited.connect(self.input_message.hide)
@@ -111,7 +121,7 @@ class DownloadPage(QWidget):
         body.setSpacing(SPACE["sm"])
         heading = QHBoxLayout()
         heading.setSpacing(SPACE["md"])
-        self.task_icon = IconBadge("nav-download")
+        self.task_icon = IconBadge("audio" if audio else "nav-download")
         self.task_icon.setFixedSize(SPACE["page"], SPACE["page"])
         heading.addWidget(self.task_icon)
         labels = QVBoxLayout()
@@ -126,7 +136,7 @@ class DownloadPage(QWidget):
         body.addLayout(heading)
         self.progress = QProgressBar()
         self.progress.setTextVisible(False)
-        self.progress.setAccessibleName("下载进度")
+        self.progress.setAccessibleName("MP3 提取进度" if audio else "下载进度")
         self.progress.setValue(0)
         self.progress.hide()
         body.addWidget(self.progress)
@@ -166,12 +176,13 @@ class DownloadPage(QWidget):
         body.addLayout(queue_row)
         self.task_panel.hide()
         layout.addWidget(self.task_panel)
-        self.recent = RecentList()
-        self.recent.setObjectName("recentList")
-        self.recent.setAccessibleName("最近三个作品")
-        self.recent.setItemDelegate(RecentDelegate(self.recent))
-        self.recent.open_requested.connect(self.open_recent)
-        layout.addWidget(self.recent)
+        if not audio:
+            self.recent = RecentList()
+            self.recent.setObjectName("recentList")
+            self.recent.setAccessibleName("最近三个作品")
+            self.recent.setItemDelegate(RecentDelegate(self.recent))
+            self.recent.open_requested.connect(self.open_recent)
+            layout.addWidget(self.recent)
         layout.addStretch(1)
         center.addWidget(self.composition, 1)
         center.addStretch()
@@ -193,6 +204,7 @@ class DownloadPage(QWidget):
         self.input_message.show()
 
     def render(self, task):
+        self.last_task = task
         self.task_panel.show()
         self.task_title.setText(task.title)
         self.task_status.setText(task.message)
@@ -205,6 +217,8 @@ class DownloadPage(QWidget):
             "failed": ("下载失败", "danger", "alert"),
             "cancelled": ("已取消", "neutral", "nav-download"),
         }.get(task.state, ("等待中", "neutral", "nav-download"))
+        if self.audio_mode and image == "nav-download":
+            image = "audio"
         self.task_badge.setText(label)
         set_tone(self.task_badge, tone)
         set_tone(self.progress, tone)
@@ -213,7 +227,11 @@ class DownloadPage(QWidget):
         self.cancel_button.setVisible(task.state == "running")
         self.cancel_button.setEnabled(not task.cancelled)
         self.retry_button.setVisible(task.state in {"failed", "cancelled"})
-        self.login_button.setVisible(task.state == "failed")
+        self.login_button.setVisible(task.state == "failed" and not getattr(task, "local_path", ""))
+        if getattr(task, "mode", "video") == "audio" and task.state == "running":
+            self.task_badge.setText("提取中")
+        elif getattr(task, "mode", "video") == "audio" and task.state == "failed":
+            self.task_badge.setText("提取失败")
         self.view_button.setVisible(task.state == "done")
         if active and not task.total:
             self.progress.setRange(0, 0)
@@ -246,6 +264,16 @@ class DownloadPage(QWidget):
         self.recent.update_grid()
         if rows and current >= 0:
             self.recent.setCurrentRow(min(current, len(rows[:3]) - 1))
+
+
+class DownloadPage(TransferPage):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
+
+class AudioExtractionPage(TransferPage):
+    def __init__(self, parent=None):
+        super().__init__(parent, audio=True)
 
 
 class SettingsDialog(QDialog):
@@ -286,6 +314,29 @@ class SettingsDialog(QDialog):
         body.addWidget(self.storage_retry, 0, Qt.AlignLeft)
         window.storage.changed.connect(self.render_storage)
         layout.addWidget(storage)
+        exports, body = panel()
+        body.addWidget(text_label("导出格式", role="sectionTitle"))
+        chosen = export_preferences()
+        self.video_format = NoWheelComboBox()
+        for value in VIDEO_FORMATS:
+            self.video_format.addItem(value.upper() + ("（默认）" if value == "mp4" else ""), value)
+        self.image_format = NoWheelComboBox()
+        for value in IMAGE_FORMATS:
+            self.image_format.addItem({"png": "PNG（默认）", "jpg": "JPEG", "webp": "WebP"}[value], value)
+        self.audio_bitrate = NoWheelComboBox()
+        for value in AUDIO_BITRATES:
+            self.audio_bitrate.addItem(f"{value} kbps", value)
+        for label, field, key in (("视频", self.video_format, "video_format"),
+                                  ("图片", self.image_format, "image_format"),
+                                  ("MP3 音质", self.audio_bitrate, "audio_bitrate")):
+            field.setAccessibleName(label + "导出设置")
+            field.setCurrentIndex(field.findData(chosen[key]))
+            row = QHBoxLayout()
+            row.addWidget(text_label(label), 1)
+            row.addWidget(field, 1)
+            body.addLayout(row)
+            field.currentIndexChanged.connect(self.configure_exports)
+        layout.addWidget(exports)
         account, body = panel()
         body.addWidget(text_label("账号与登录", role="sectionTitle"))
         self.auto_login = QCheckBox("自动读取本机浏览器的登录状态")
@@ -304,7 +355,7 @@ class SettingsDialog(QDialog):
         self.scan = QPushButton("扫描登录状态")
         self.scan.clicked.connect(self.accounts.scan)
         row.addWidget(self.scan)
-        self.platform = QComboBox()
+        self.platform = NoWheelComboBox()
         for key, site in PLATFORMS.items():
             self.platform.addItem(site.label, key)
         chosen = window.current_platform()
@@ -368,11 +419,16 @@ class SettingsDialog(QDialog):
     def configure(self, *_):
         self.accounts.configure(self.auto_login.isChecked(), self.source.currentData())
 
+    def configure_exports(self, *_):
+        save_settings(video_format=self.video_format.currentData(), image_format=self.image_format.currentData(),
+                      audio_bitrate=self.audio_bitrate.currentData())
+
     def open_login(self):
         key = self.platform.currentData()
         url = None
         try:
-            value, site, _ = download_link(self.window.url.text())
+            page = self.window.audio_page if self.window.pages.currentIndex() == 3 else self.window.download_page
+            value, site, _ = download_link(page.url.text())
             if site.key == key:
                 url = value
         except ValueError:
@@ -421,15 +477,15 @@ class DownloadWindow(QMainWindow):
         self.menu_button = self.icon_rail.logo
         self.rail_navigation = self.icon_rail.navigation
         self.account_button = self.icon_rail.account_button
-        self.navigation = []
+        self.navigation = [None] * len(NAVIGATION_ITEMS)
         self.group = QActionGroup(self)
         self.group.setExclusive(True)
-        for index, (title, image) in enumerate((("下载", "compose"), ("我的视频", "library-stack"), ("软件更新", "nav-update"))):
+        for index, title, image in NAVIGATION_ITEMS:
             action = QAction(icon(image, COLORS["text"]), title, self)
             action.setCheckable(True)
             action.triggered.connect(lambda checked=False, page=index: self.set_page(page))
             self.group.addAction(action)
-            self.navigation.append(action)
+            self.navigation[index] = action
         try:
             self.sidebar_width = int(read_settings().get("sidebar_width", RAIL["expanded_width"]))
         except (ValueError, TypeError):
@@ -471,6 +527,7 @@ class DownloadWindow(QMainWindow):
         self.download_page.recent.itemDelegate().thumbnail_provider = self.library.model.thumbnail
         self.library.model.record_changed.connect(self.download_page.update_recent)
         self.library.open_requested.connect(self.open_media)
+        self.library.extract_audio_requested.connect(self.extract_audio)
         self.download_page.open_requested.connect(self.open_media)
         self.library.download_requested.connect(lambda: self.set_page(0))
         self.library.output_changed.connect(self.choose_output)
@@ -482,6 +539,11 @@ class DownloadWindow(QMainWindow):
         self.pages.addWidget(self.library)
         self.update_page = UpdatePage()
         self.pages.addWidget(self.update_page)
+        self.audio_page = AudioExtractionPage()
+        self.audio_page.submitted.connect(self.submit_audio_link)
+        self.audio_page.local_audio_requested.connect(self.choose_local_audio)
+        self.pages.addWidget(self.audio_page)
+        self._feedback_page = self.download_page
         update_options = {"client_factory": update_client_factory} if update_client_factory else {}
         self.updater = UpdateController(self.update_page, self, **update_options)
         self.updater.navigate.connect(lambda: self.set_page(2))
@@ -496,15 +558,16 @@ class DownloadWindow(QMainWindow):
         self.setStyleSheet(stylesheet())
         self.layout_sidebar(False)
         self.downloads.changed.connect(self.render_task)
-        self.downloads.rejected.connect(self.download_page.reject_input)
+        self.downloads.rejected.connect(lambda message: self._feedback_page.reject_input(message))
         self.downloads.duplicate.connect(self.already_downloaded)
         self.downloads.queue_changed.connect(self.render_queue)
         self.downloads.completed.connect(self.download_completed)
-        self.download_page.cancel.connect(self.downloads.cancel_current)
-        self.download_page.retry.connect(self.retry_download)
-        self.download_page.login.connect(self.open_settings)
-        self.download_page.show_library.connect(lambda: self.set_page(1))
-        self.download_page.clear_queue.connect(self.downloads.clear_queue)
+        for page, mode in ((self.download_page, "video"), (self.audio_page, "audio")):
+            page.cancel.connect(lambda mode=mode: self.cancel_transfer(mode))
+            page.retry.connect(lambda page=page: self.retry_download(page))
+            page.login.connect(self.open_settings)
+            page.show_library.connect(lambda: self.set_page(1))
+            page.clear_queue.connect(lambda mode=mode: self.downloads.clear_queue(mode))
         self.set_page(0)
         self.download_page.render_recent(self.store.rows())
         self.icon_rail.set_rows(self.store.rows())
@@ -561,14 +624,16 @@ class DownloadWindow(QMainWindow):
         self.pages.setCurrentIndex(page)
         self.navigation[page].setChecked(True)
         self.icon_rail.set_page(page)
-        self.page_title.setText(("", "我的视频", "软件更新")[page])
-        self.page_title.setVisible(page != 0)
-        for index, name in enumerate(("compose", "library-stack", "nav-update")):
+        self.page_title.setText(("", "我的视频", "软件更新", "")[page])
+        self.page_title.setVisible(page in {1, 2})
+        for index, _, name in NAVIGATION_ITEMS:
             self.navigation[index].setIcon(icon(name, COLORS["accent"] if index == page else COLORS["muted"]))
         if page == 0:
             self.url.setFocus(Qt.OtherFocusReason)
         elif page == 1:
             self.library.refresh()
+        elif page == 3:
+            self.audio_page.url.setFocus(Qt.OtherFocusReason)
 
     def show_search(self):
         if self.closing:
@@ -592,23 +657,60 @@ class DownloadWindow(QMainWindow):
         self.rail_navigation[2].setToolTip("软件更新 · 有新版本" if available else "软件更新")
 
     def submit_link(self, text):
+        return self.submit_transfer(text, self.download_page, "video")
+
+    def submit_audio_link(self, text):
+        return self.submit_transfer(text, self.audio_page, "audio")
+
+    def submit_transfer(self, text, page, mode):
+        self._feedback_page = page
         if self.closing or self.updater.installing:
-            self.download_page.reject_input("正在准备更新，请等待新版启动后再下载。")
+            page.reject_input("正在准备更新，请等待新版启动后再操作。")
             return None
-        self.download_page.input_message.hide()
-        return self.downloads.submit(text)
+        page.input_message.hide()
+        task = self.downloads.submit(text, mode=mode)
+        if task:
+            self.render_task(task)
+        return task
+
+    def choose_local_audio(self):
+        path, _ = QFileDialog.getOpenFileName(self, "选择要提取 MP3 的视频", str(self.output),
+                                             "视频文件 (*.mp4 *.mkv *.mov *.webm *.m4v *.avi *.flv *.ts)")
+        if path:
+            self.extract_audio({"path": path})
+
+    def extract_audio(self, item):
+        self.set_page(3)
+        self._feedback_page = self.audio_page
+        if self.closing or self.updater.installing:
+            self.audio_page.reject_input("正在准备更新，请等待新版启动后再提取。")
+            return None
+        self.audio_page.input_message.hide()
+        task = self.downloads.extract_audio(item["path"])
+        if task:
+            self.render_task(task)
+        return task
 
     def render_task(self, task):
-        # Queued completions should not replace a newer active task's feedback.
-        if self.downloads.active and self.downloads.active is not task:
+        # A task updates its own page, including while the other page is active.
+        page = self.audio_page if getattr(task, "mode", "video") == "audio" else self.download_page
+        if page.last_task is not None and getattr(page.last_task, "created", 0) > getattr(task, "created", 0):
             return
-        self.download_page.render(task)
+        active = self.downloads.active
+        if active and active is not task and active.mode == getattr(task, "mode", "video"):
+            return
+        page.render(task)
+
+    def cancel_transfer(self, mode):
+        if self.downloads.active and self.downloads.active.mode == mode:
+            self.downloads.cancel_current()
 
     def render_queue(self):
-        count = len(self.downloads.queue)
-        self.download_page.queue_label.setText(f"等待 {count}" if count else "")
-        self.download_page.queue_label.setVisible(bool(count))
-        self.download_page.clear_queue_button.setVisible(bool(count))
+        for page, mode in ((self.download_page, "video"), (self.audio_page, "audio")):
+            count = sum(task.mode == mode for task in self.downloads.queue)
+            page.queue_label.setText(f"等待 {count}" if count else "")
+            page.queue_label.setVisible(bool(count))
+            page.clear_queue_button.setVisible(bool(count))
 
     def download_completed(self, result):
         self.last_result = result
@@ -616,19 +718,29 @@ class DownloadWindow(QMainWindow):
         self.library.refresh()
 
     def already_downloaded(self, item):
-        self.download_page.reject_input("这条作品已下载，可前往我的视频查看。")
-        self.download_page.view_button.show()
+        self._feedback_page.reject_input("这条作品已保存，可前往我的视频查看。")
+        self._feedback_page.view_button.show()
 
-    def retry_download(self):
-        task = self.downloads.last
+    def retry_download(self, page=None):
+        page = page or (self.audio_page if self.pages.currentIndex() == 3 else self.download_page)
+        self._feedback_page = page
+        task = page.last_task
         if task:
-            self.downloads.submit(task.url, force=True)
+            if task.local_path:
+                retried = self.downloads.extract_audio(task.local_path, force=True, options=task.options)
+            else:
+                retried = self.downloads.submit(task.url, force=True, mode=task.mode, options=task.options)
+            if retried:
+                page.input_message.hide()
+                self.render_task(retried)
+            return retried
 
     def current_platform(self):
+        page = self.audio_page if self.pages.currentIndex() == 3 else self.download_page
         try:
-            return download_link(self.url.text())[1].key
+            return download_link(page.url.text())[1].key
         except ValueError:
-            return self.downloads.last.platform.key if self.downloads.last else "bilibili"
+            return page.last_task.platform.key if page.last_task and page.last_task.platform.key in PLATFORMS else "bilibili"
 
     def open_settings(self):
         if self.settings_dialog and self.settings_dialog.isVisible():
@@ -699,6 +811,10 @@ class DownloadWindow(QMainWindow):
             QMessageBox.information(self, "文件不可用", "文件已被移动或删除，请刷新视频库，或在保存文件夹中确认位置。")
             self.library.refresh()
             return
+        if item["kind"] == "audio":
+            if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(item["path"]).resolve()))):
+                QMessageBox.information(self, "未能打开音频", "请为 MP3 选择默认播放器，或在保存文件夹中打开此文件。")
+            return
         try:
             from media_player import GalleryDialog, PlayerDialog
             if self.player_dialog:
@@ -706,11 +822,19 @@ class DownloadWindow(QMainWindow):
                     self.player_dialog.close()
                 except RuntimeError:
                     pass
-            self.player_dialog = GalleryDialog(item, self) if item["kind"] == "gallery" else PlayerDialog(item["path"], item["title"], self)
+            if item["kind"] == "image":
+                image_item = {**item, "path": str(Path(item["path"]).parent),
+                              "metadata": json.dumps({"assets": [{"kind": "image", "path": item["path"]}]})}
+                self.player_dialog = GalleryDialog(image_item, self)
+                self.player_dialog.asset_delete_requested.connect(lambda *_: self.library.delete_file(item))
+            else:
+                self.player_dialog = GalleryDialog(item, self) if item["kind"] == "gallery" else PlayerDialog(item["path"], item["title"], self)
             self.player_dialog.media_id = item["id"]
             self.player_dialog.delete_requested.connect(lambda record=item: self.library.delete_file(record))
             if item["kind"] == "gallery":
                 self.player_dialog.asset_delete_requested.connect(self.delete_gallery_asset)
+            elif item["kind"] != "image":
+                self.player_dialog.export_audio_requested.connect(lambda record=item: self.extract_audio(record))
             self.player_dialog.show()
         except (ImportError, RuntimeError) as error:
             reply = QMessageBox.question(self, "内置播放不可用", "播放组件未能打开：" + str(error) + "\n是否使用 Windows 默认播放器？")
@@ -787,7 +911,7 @@ def main():
     QApplication.setAttribute(Qt.AA_ShareOpenGLContexts)
     app = QApplication(sys.argv)
     app.setFont(QFont("Segoe UI", 10))
-    verification = "--verify-install" in sys.argv or "--verify-storage" in sys.argv
+    verification = any(flag in sys.argv for flag in ("--verify-install", "--verify-storage", "--verify-export"))
     if verification:
         from desktop_verify import prepare_fonts
         prepare_fonts()
@@ -820,7 +944,10 @@ def main():
         window.activateWindow()
     server.newConnection.connect(activate)
     window.show()
-    if "--verify-storage" in sys.argv:
+    if "--verify-export" in sys.argv:
+        from export_verify import verify_export
+        verify_export(app, window, sys.argv[sys.argv.index("--verify-export") + 1])
+    elif "--verify-storage" in sys.argv:
         from storage_verify import verify_storage
         verify_storage(app, window, sys.argv[sys.argv.index("--verify-storage") + 1])
     elif verification:

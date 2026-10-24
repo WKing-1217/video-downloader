@@ -317,14 +317,17 @@ class PasteLinkEdit(QLineEdit):
         menu.exec(event.globalPos())
 
 
-class LoginSourceComboBox(QComboBox):
+class NoWheelComboBox(QComboBox):
+    """Keep scrolling from changing a choice or stealing keyboard focus."""
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setFocusPolicy(Qt.StrongFocus)
-        self.setAccessibleName("登录来源")
 
     def wheelEvent(self, event):
-        if self.view().isVisible():
-            super().wheelEvent(event)
-        else:
-            event.ignore()
+        event.ignore()
+
+
+class LoginSourceComboBox(NoWheelComboBox):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAccessibleName("登录来源")

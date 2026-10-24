@@ -11,6 +11,9 @@ import uuid
 from runtime_paths import data_dir
 
 VIDEO_EXTENSIONS = {".mp4", ".mkv", ".webm", ".mov", ".m4v", ".avi", ".flv", ".ts"}
+AUDIO_EXTENSIONS = {".mp3", ".m4a", ".aac", ".flac", ".wav", ".ogg", ".opus"}
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", ".gif", ".avif"}
+MEDIA_EXTENSIONS = VIDEO_EXTENSIONS | AUDIO_EXTENSIONS | IMAGE_EXTENSIONS
 EXCLUDED_FOLDERS = {"未通过校验", ".downloads", ".downloader-temp", "__pycache__"}
 
 
@@ -36,6 +39,27 @@ def gallery_assets(folder, metadata):
     folder = Path(folder)
     return [{**item, "path": str(folder / Path(item.get("path", "")).name)}
             for item in metadata.get("assets", []) if isinstance(item, dict) and item.get("path")]
+
+
+def discover_album(folder, names):
+    """Recognize receipt-free image folders without swallowing unrelated videos."""
+    folder = Path(folder)
+    images, companions = [], []
+    for name in sorted(names):
+        path = folder / name
+        if path.is_symlink() or name.startswith(".") or re.search(r"\.(?:f\d+|part|temp)(?:\.|$)", name):
+            continue
+        extension = path.suffix.lower()
+        if extension in IMAGE_EXTENSIONS:
+            images.append({"kind": "image", "path": str(path)})
+        elif extension in AUDIO_EXTENSIONS and re.search(r"背景音乐|music|audio", path.stem, re.IGNORECASE):
+            companions.append({"kind": "music", "path": str(path)})
+        elif extension in VIDEO_EXTENSIONS and re.search(r"实况|live.?photo", path.stem, re.IGNORECASE):
+            companions.append({"kind": "live_photo", "path": str(path)})
+    if not images:
+        return {}
+    assets = sorted(images + companions, key=lambda asset: Path(asset["path"]).name)
+    return {"title": folder.name, "content_type": "gallery", "assets": assets}
 
 
 def regular_path(path):
@@ -126,7 +150,8 @@ class LibraryStore:
         stat = path.stat()
         metadata = metadata or {}
         key, identity = path_key(path), file_identity(path)
-        kind = "gallery" if path.is_dir() else "video"
+        kind = ("gallery" if path.is_dir() else "audio" if path.suffix.lower() in AUDIO_EXTENSIONS
+                else "image" if path.suffix.lower() in IMAGE_EXTENSIONS else "video")
         with closing(self.connect()) as db, db:
             old = db.execute("SELECT * FROM media WHERE path_key=?", (key,)).fetchone()
             if old and old["hidden"] and not completed:
@@ -143,9 +168,11 @@ class LibraryStore:
             duration = float(content.get("duration") or (old["duration"] if old else 0))
             size = int(content.get("size") or stat.st_size)
             trusted = bool(metadata.get("duration") and metadata.get("size") == stat.st_size)
-            state = "ready" if trusted or kind == "gallery" or completed else old["state"] if same else "pending"
+            state = "ready" if trusted or kind in {"gallery", "image"} or completed else old["state"] if same else "pending"
             if kind == "gallery":
                 assets = gallery_assets(path, content)
+                size = sum(Path(item["path"]).stat().st_size for item in assets if Path(item["path"]).is_file())
+                content.update(content_type="gallery", assets=assets, size=size)
                 state = "ready" if assets and all(Path(item["path"]).is_file() for item in assets) else "missing"
             values = (str(path), key, title, duration, size,
                       time.time() if completed else old["completed"] if old else stat.st_mtime,
@@ -195,7 +222,7 @@ class LibraryStore:
         self.update(identifier, hidden=1, state="missing")
 
     def delete_asset(self, identifier, filename):
-        """Delete one recorded album member and keep receipt/catalogue in sync."""
+        """Delete one recorded album member; metadata stays in SQLite only."""
         item = self.get(identifier)
         if not item or item["kind"] != "gallery":
             raise ValueError("图文作品不存在。")
@@ -211,9 +238,6 @@ class LibraryStore:
         remaining = [asset for asset in assets if path_key(asset["path"]) != path_key(target)]
         updated = {**content, "assets": remaining,
                    "size": sum(Path(asset["path"]).stat().st_size for asset in remaining if Path(asset["path"]).is_file())}
-        receipt = folder / "作品信息.json"
-        previous = receipt.read_bytes() if receipt.is_file() else None
-        temporary = receipt.with_name(".receipt-" + uuid.uuid4().hex)
         staged = target.with_name(".delete-" + uuid.uuid4().hex)
         renamed = False
         try:
@@ -221,15 +245,10 @@ class LibraryStore:
                 target.rename(staged)
                 renamed = True
             if remaining:
-                with temporary.open("w", encoding="utf-8") as stream:
-                    json.dump(updated, stream, ensure_ascii=False)
-                    stream.flush()
-                    os.fsync(stream.fileno())
-                temporary.replace(receipt)
                 self.update(identifier, metadata=json.dumps(updated, ensure_ascii=False),
-                            size=updated["size"], thumb="", state="ready")
+                            size=updated["size"], thumb="",
+                            state="ready" if all(Path(asset["path"]).is_file() for asset in remaining) else "missing")
             else:
-                receipt.unlink(missing_ok=True)
                 self.update(identifier, metadata=json.dumps(updated, ensure_ascii=False),
                             size=0, thumb="", hidden=1, state="missing")
             if renamed:
@@ -238,16 +257,9 @@ class LibraryStore:
             # An occupied file or failed DB write must leave the old view usable.
             if renamed and staged.exists():
                 staged.rename(target)
-            if previous is not None:
-                temporary.write_bytes(previous)
-                temporary.replace(receipt)
-            elif receipt.exists():
-                receipt.unlink()
             self.update(identifier, metadata=item["metadata"], size=item["size"], thumb=item["thumb"],
                         hidden=item["hidden"], state=item["state"])
             raise
-        finally:
-            temporary.unlink(missing_ok=True)
         if not remaining:
             try:
                 folder.rmdir()
@@ -257,6 +269,9 @@ class LibraryStore:
 
     def scan(self, cancelled=None):
         count = 0
+        galleries = [item for item in self.rows(include_hidden=True) if item["kind"] == "gallery"]
+        by_path = {item["path_key"]: item for item in galleries}
+        by_identity = {item["file_id"]: item for item in galleries if item["file_id"]}
         for folder in self.roots():
             if not Path(folder).is_dir():
                 continue
@@ -266,6 +281,24 @@ class LibraryStore:
                 directories[:] = [name for name in directories if name not in EXCLUDED_FOLDERS
                                   and not name.startswith(".") and not (Path(current) / name).is_symlink()]
                 current = Path(current)
+                saved_album = by_path.get(path_key(current))
+                if saved_album is None:
+                    try:
+                        previous = by_identity.get(file_identity(current))
+                        if previous and not Path(previous["path"]).exists():
+                            saved_album = previous
+                    except OSError:
+                        pass
+                if saved_album is not None:
+                    # Once catalogued, SQLite owns album membership. Legacy
+                    # receipts may describe images the user has since deleted.
+                    try:
+                        self.upsert(current)
+                        count += 1
+                    except OSError:
+                        pass
+                    directories[:] = []
+                    continue
                 if "作品信息.json" in files:
                     content = read_receipt(current / "作品信息.json")
                     if content.get("content_type") == "gallery":
@@ -276,9 +309,21 @@ class LibraryStore:
                             pass
                         directories[:] = []
                         continue
+                album_members = set()
+                if path_key(current) != path_key(folder):
+                    content = discover_album(current, files)
+                    if content:
+                        try:
+                            self.upsert(current, content)
+                            count += 1
+                            album_members = {path_key(asset["path"]) for asset in content["assets"]}
+                        except OSError:
+                            pass
                 for name in files:
                     path = current / name
-                    if path.suffix.lower() not in VIDEO_EXTENSIONS or re.search(r"\.(?:f\d+|part|temp)(?:\.|$)", name):
+                    if (path.suffix.lower() not in MEDIA_EXTENSIONS or path.is_symlink()
+                            or path_key(path) in album_members or name.startswith(".")
+                            or re.search(r"\.(?:f\d+|part|temp)(?:\.|$)", name)):
                         continue
                     try:
                         self.upsert(path, read_receipt(path.with_suffix(path.suffix + ".info.json")))

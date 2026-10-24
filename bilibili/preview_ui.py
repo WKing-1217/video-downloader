@@ -56,7 +56,7 @@ def seed_samples(store, output):
 def capture_review(app, window, directory):
     from PySide6.QtCore import Qt, QPoint, QTimer
     from PySide6.QtTest import QTest
-    from PySide6.QtWidgets import QLabel, QFrame
+    from PySide6.QtWidgets import QLabel, QFrame, QComboBox
     from media_player import GalleryDialog
     from ui_theme import COLORS, DIALOG, METRICS, RAIL
     from ui_widgets import RecentDelegate
@@ -96,6 +96,23 @@ def capture_review(app, window, directory):
         check("idle_task_hidden", not window.download_page.task_panel.isVisible())
         visible_texts = [label.text() for label in window.findChildren(QLabel) if label.isVisible() and label.text()]
         check("home_has_only_requested_copy", visible_texts == [window.download_page.greeting.text()])
+        check("home_has_no_mp3_mode_or_local_picker", not window.download_page.findChildren(QComboBox)
+              and not hasattr(window.download_page, "local_audio"))
+        window.download_page.url.setText("下载页保留的链接")
+        window.set_page(3)
+        check("mp3_is_independent_page", window.pages.currentWidget() is window.audio_page
+              and window.rail_navigation[3].isChecked() and window.audio_page.local_audio.isVisible())
+        window.audio_page.url.setText("提取页保留的链接")
+        check("mp3_page_reuses_composer_style", window.audio_page.composer.objectName() == window.download_page.composer.objectName()
+              and window.audio_page.composer.width() <= window.pages.width())
+        window.set_page(0)
+        check("page_inputs_are_independent", window.download_page.url.text() == "下载页保留的链接"
+              and window.audio_page.url.text() == "提取页保留的链接")
+        window.download_page.url.clear()
+        window.audio_page.url.clear()
+        window.set_page(3)
+        shot("extract-mp3")
+        window.set_page(0)
         check("chrome_uses_blue_gray_palette", COLORS["accent"] == "#45658a" and COLORS["surface"] == "#ffffff")
         send = window.download_page.submit.grab()
         check("submit_button_uses_primary_accent", send.toImage().pixelColor(round(6 * send.devicePixelRatioF()), round(21 * send.devicePixelRatioF())).name() == COLORS["accent"])
@@ -135,14 +152,14 @@ def capture_review(app, window, directory):
         QTest.mouseClick(window.icon_rail.collapse_button, Qt.LeftButton)
         check("collapse_restores_icon_rail_and_keeps_selection", not window.icon_rail.expanded and window.icon_rail.width() == RAIL["width"] and window.rail_navigation[1].isChecked())
         wait(lambda: not window.library.scanning)
-        for page in (2, 0, 1):
+        for page in (3, 2, 0, 1):
             QTest.mouseClick(window.rail_navigation[page], Qt.LeftButton)
             check(f"rail_opens_page_{page}", window.pages.currentIndex() == page and window.rail_navigation[page].isChecked())
         window.activateWindow()
         window.library.grid.setFocus()
         QTest.qWait(60)
         QTest.keyClick(window, Qt.Key_K, Qt.ControlModifier)
-        check("collapsed_rail_omits_search_and_shortcut_still_works", not window.icon_rail.header_search.isVisible() and len(window.rail_navigation) == 3 and window.search_dialog.isVisible() and sum(button.isChecked() for button in window.rail_navigation.values()) == 1)
+        check("collapsed_rail_omits_search_and_shortcut_still_works", not window.icon_rail.header_search.isVisible() and len(window.rail_navigation) == 4 and window.search_dialog.isVisible() and sum(button.isChecked() for button in window.rail_navigation.values()) == 1)
         QTest.keyClick(window.search_dialog.search, Qt.Key_Escape)
         shot("library")
         grid = window.library.grid
@@ -203,6 +220,10 @@ def capture_review(app, window, directory):
         check("long_title_does_not_expand_window", window.download_page.task_title.width() < window.pages.width())
         shot("compact-download")
         check("composer_stays_within_window", window.download_page.composer.width() <= window.pages.width())
+        window.set_page(3)
+        check("compact_extraction_controls_fit", window.audio_page.composer.width() <= window.pages.width()
+              and window.audio_page.local_audio.isVisible())
+        shot("compact-extract-mp3")
         window.set_page(1)
         wait(lambda: not window.library.scanning)
         QTest.qWait(100)
@@ -228,6 +249,8 @@ def capture_review(app, window, directory):
         shot("compact-update-ready")
         check("compact_update_action_visible", window.update_page.install_button.isVisible())
         window.resize(1440, 900)
+        window.set_page(3)
+        shot("wide-extract-mp3")
         window.set_page(1)
         wait(lambda: not window.library.scanning)
         shot("wide-library")
@@ -270,9 +293,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--capture", action="store_true")
     parser.add_argument("--scale", default="1", choices=("1", "1.5", "2"))
-    parser.add_argument("--page", type=int, default=0, choices=(0, 1, 2))
+    parser.add_argument("--page", type=int, default=0, choices=(0, 1, 2, 3))
     parser.add_argument("--snapshot-on-start", action="store_true")
     parser.add_argument("--expanded", action="store_true")
+    parser.add_argument("--mode", choices=("video", "audio"), default="video")
     parser.add_argument("--work-dir", type=Path, help="Use a separate local review directory")
     args = parser.parse_args()
     if args.capture:
@@ -307,7 +331,7 @@ def main():
     window = DownloadWindow(auto_scan=False, restore_web_login=False, check_updates=False, store=store)
     window.setWindowTitle("视频下载器 · 设计预览")
     window.show()
-    window.set_page(args.page)
+    window.set_page(3 if args.mode == "audio" else args.page)
     if args.expanded:
         window.icon_rail.set_expanded(True)
     if args.capture:

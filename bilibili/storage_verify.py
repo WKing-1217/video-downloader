@@ -113,7 +113,8 @@ def verify_storage(app, window, report_path):
                 gallery = window.player_dialog
                 check("frozen_single_image_delete_keeps_other_image", gallery.list.count() == 1 and Path(gallery.assets[0]["path"]).is_file())
                 album = window.store.get(fixtures["album"]["id"])
-                check("frozen_receipt_updated", len(json.loads((Path(album["path"]) / "作品信息.json").read_text(encoding="utf-8"))["assets"]) == 1)
+                check("frozen_catalogue_updated_without_receipt_write", len(json.loads(album["metadata"])["assets"]) == 1
+                      and len(json.loads((Path(album["path"]) / "作品信息.json").read_text(encoding="utf-8"))["assets"]) == 2)
                 gallery.grab().save(str(work / "frozen-gallery.png"))
                 window.grab().save(str(work / "frozen-library.png"))
                 finish()

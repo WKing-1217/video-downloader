@@ -11,13 +11,13 @@ import threading
 from PySide6.QtCore import QAbstractListModel, QEvent, QFileSystemWatcher, QModelIndex, QPoint, QRect, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QDesktopServices, QFont, QPainter, QPainterPath, QPixmap, QPen
 from PySide6.QtCore import QUrl
-from PySide6.QtWidgets import (QComboBox, QFileDialog, QHBoxLayout, QLineEdit, QListView, QMenu,
+from PySide6.QtWidgets import (QFileDialog, QHBoxLayout, QLineEdit, QListView, QMenu,
                               QMessageBox, QPushButton, QStackedWidget, QStyle, QStyledItemDelegate, QVBoxLayout, QWidget)
 from async_jobs import BackgroundPool
 from media_library import gallery_assets
 from runtime_paths import data_dir, tool
 from ui_theme import COLORS, METRICS, SPACE, icon
-from ui_widgets import EmptyState, LocationBar, clock_text, size_text, text_label
+from ui_widgets import EmptyState, LocationBar, NoWheelComboBox, clock_text, size_text, text_label
 
 
 def thumbnail_and_metadata(item, cache):
@@ -25,6 +25,8 @@ def thumbnail_and_metadata(item, cache):
     if not path.exists():
         return item["id"], {"state": "missing"}
     metadata = json.loads(item["metadata"])
+    is_audio = item["kind"] == "audio" or path.suffix.casefold() in {
+        ".mp3", ".m4a", ".aac", ".flac", ".ogg", ".opus", ".wav", ".wma"}
     source = path
     result = {}
     if item["kind"] == "gallery":
@@ -37,12 +39,17 @@ def thumbnail_and_metadata(item, cache):
         try:
             data = json.loads(probe.stdout)
             duration = float(data.get("format", {}).get("duration") or 0)
-            valid = any(stream.get("codec_type") == "video" for stream in data.get("streams", []))
+            stream_kind = "audio" if is_audio else "video"
+            valid = any(stream.get("codec_type") == stream_kind for stream in data.get("streams", []))
             if probe.returncode or not valid or duration <= 0:
                 return item["id"], {"state": "unreadable"}
             result.update(duration=duration, size=path.stat().st_size, state="ready")
         except (ValueError, TypeError):
             return item["id"], {"state": "unreadable"}
+    if is_audio:
+        # Audio has no video frame. Resolve its pending duration once, then keep
+        # the library's lightweight placeholder instead of invoking FFmpeg.
+        return item["id"], result
     signature = f"{path}|{item['mtime']}|{item['size']}"
     final = Path(cache) / (hashlib.sha256(signature.encode()).hexdigest() + ".jpg")
     if final.is_file():
@@ -222,6 +229,10 @@ class MediaDelegate(QStyledItemDelegate):
         painter.setPen(QColor(COLORS["muted"]))
         platform = json.loads(item["metadata"]).get("platform", "")
         description = {"bilibili": "Bilibili", "douyin": "抖音", "x": "X"}.get(platform, "图文作品" if item["kind"] == "gallery" else "本地视频")
+        if item["kind"] == "audio":
+            description = Path(item["path"]).suffix.lstrip(".").upper() + (" · " + description if platform in {"bilibili", "douyin", "x"} else "")
+        elif item["kind"] == "image":
+            description = Path(item["path"]).suffix.lstrip(".").upper()
         if item["state"] == "missing":
             description = "文件已移动或删除"
             painter.setPen(QColor(COLORS["danger"]))
@@ -282,6 +293,7 @@ class MediaGrid(QListView):
 
 class LibraryPage(QWidget):
     open_requested = Signal(object)
+    extract_audio_requested = Signal(object)
     download_requested = Signal()
     output_changed = Signal(str)
     refreshed = Signal(object)
@@ -304,18 +316,24 @@ class LibraryPage(QWidget):
         toolbar.setSpacing(SPACE["md"])
         self.search = QLineEdit()
         self.search.setObjectName("searchInput")
-        self.search.setPlaceholderText("搜索视频名称")
-        self.search.setAccessibleName("搜索视频名称")
+        self.search.setPlaceholderText("搜索作品名称")
+        self.search.setAccessibleName("搜索作品名称")
         self.search.addAction(icon("search", COLORS["muted"]), QLineEdit.LeadingPosition)
         self.search.setClearButtonEnabled(True)
         toolbar.addWidget(self.search, 1)
-        self.sort = QComboBox()
+        self.sort = NoWheelComboBox()
         self.sort.setAccessibleName("按下载时间排序")
         self.sort.addItems(["最近下载优先", "最早下载优先"])
         toolbar.addWidget(self.sort)
         self.refresh_button = QPushButton(icon("nav-update", COLORS["muted"]), "刷新")
         self.refresh_button.clicked.connect(self.refresh)
         toolbar.addWidget(self.refresh_button)
+        self.audio_button = QPushButton("MP3")
+        self.audio_button.setAccessibleName("将所选视频导出为 MP3")
+        self.audio_button.setToolTip("将所选视频导出为 MP3")
+        self.audio_button.setEnabled(False)
+        self.audio_button.clicked.connect(self.extract_selected_audio)
+        toolbar.addWidget(self.audio_button)
         self.delete_button = QPushButton(icon("trash", COLORS["text"]), "")
         self.delete_button.setFixedWidth(METRICS["control_height"])
         self.delete_button.setAccessibleName("删除所选作品")
@@ -341,7 +359,7 @@ class LibraryPage(QWidget):
         self.grid.setItemDelegate(MediaDelegate(self.grid))
         self.grid.open_requested.connect(self.open_requested)
         self.grid.delete_requested.connect(self.delete_file)
-        self.grid.selectionModel().selectionChanged.connect(lambda *_: self.delete_button.setEnabled(self.grid.currentIndex().isValid() and not self.storage_busy))
+        self.grid.selectionModel().selectionChanged.connect(self.update_actions)
         self.grid.setContextMenuPolicy(Qt.CustomContextMenu)
         self.grid.customContextMenuRequested.connect(self.context_menu)
         self.empty = EmptyState("暂无视频", "", action="下载")
@@ -386,9 +404,21 @@ class LibraryPage(QWidget):
         self.notice.setText(text)
         self.results.setCurrentWidget(self.grid if self.model.rows else self.empty)
         searching = bool(self.search.text())
-        self.empty.title.setText("未找到视频" if searching else "暂无视频")
+        self.empty.title.setText("未找到作品" if searching else "暂无作品")
         self.empty.hint.setText("")
         self.empty.button.setText("清空搜索" if searching else "下载")
+        self.update_actions()
+
+    def update_actions(self, *_):
+        item = self.grid.currentIndex().data(MediaModel.Row)
+        self.delete_button.setEnabled(bool(item) and not self.storage_busy)
+        self.audio_button.setEnabled(bool(item) and item["kind"] == "video"
+                                     and Path(item["path"]).is_file() and not self.storage_busy)
+
+    def extract_selected_audio(self):
+        item = self.grid.currentIndex().data(MediaModel.Row)
+        if item and item["kind"] == "video" and not self.storage_busy:
+            self.extract_audio_requested.emit(item)
 
     def _empty_action(self):
         if self.search.text():
@@ -452,7 +482,7 @@ class LibraryPage(QWidget):
         self.grid.setEnabled(not busy)
         self.choose_button.setEnabled(not busy)
         self.refresh_button.setEnabled(not busy and not self.scanning)
-        self.delete_button.setEnabled(not busy and self.grid.currentIndex().isValid())
+        self.update_actions()
         self.watcher.blockSignals(busy)
         if busy:
             self.periodic.stop()
@@ -467,6 +497,9 @@ class LibraryPage(QWidget):
             return
         menu = QMenu(self)
         menu.addAction("播放 / 查看作品", lambda: self.open_requested.emit(item))
+        if item["kind"] == "video":
+            extract = menu.addAction("导出 MP3", lambda: self.extract_audio_requested.emit(item))
+            extract.setEnabled(Path(item["path"]).is_file() and not self.storage_busy)
         menu.addAction("打开文件所在位置", lambda: self.reveal(item))
         menu.addAction("复制文件路径", lambda: self._copy_path(item))
         menu.addSeparator()
@@ -505,7 +538,7 @@ class LibraryPage(QWidget):
         dialog = QMessageBox(self)
         dialog.setWindowTitle("删除本地文件")
         dialog.setTextFormat(Qt.PlainText)
-        kind = "整个图文作品及其中的图片和配乐" if item["kind"] == "gallery" else "此视频"
+        kind = {"gallery": "整个图文作品及其中的图片和配乐", "audio": "此音频", "image": "此图片"}.get(item["kind"], "此视频")
         dialog.setText("删除" + kind + "？本地文件也会删除。\n\n" + item["title"])
         dialog.setStandardButtons(QMessageBox.Yes | QMessageBox.Cancel)
         dialog.setDefaultButton(QMessageBox.Cancel)

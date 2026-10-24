@@ -16,6 +16,18 @@ public class MainActivity extends QtActivity {
         setIntent(intent);
         acceptIntent(intent);
     }
+    @Override public void onActivityResult(int request, int result, Intent data) {
+        super.onActivityResult(request, result, data);
+        if (request == DownloadBridge.PICK_VIDEO_REQUEST) {
+            android.net.Uri uri = result == RESULT_OK && data != null ? data.getData() : null;
+            if (uri != null) {
+                try { getContentResolver().takePersistableUriPermission(uri,
+                        data.getFlags() & Intent.FLAG_GRANT_READ_URI_PERMISSION); }
+                catch (SecurityException ignored) { }
+            }
+            DownloadBridge.videoPicked(uri);
+        }
+    }
     private void acceptIntent(Intent intent) {
         if (intent == null) return;
         if (Intent.ACTION_SEND.equals(intent.getAction())) {

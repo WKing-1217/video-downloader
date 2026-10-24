@@ -16,6 +16,8 @@ sys.path.insert(0, str(root))
 from app_version import APP_VERSION
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--baseline", type=Path, default=root / "dist/VideoDownloader")
+parser.add_argument("--installer", type=Path, default=root / "build/v2-qa-installer/VideoDownloader-Windows-Setup.exe",
+                    help="An isolated-QA AppId installer, never the public installer")
 args = parser.parse_args()
 work = root / "build" / ("v2-upgrade-" + str(time.time_ns()))
 app = work / "application"
@@ -27,7 +29,7 @@ for folder in (cache, output, data / "WebProfile"):
 baseline = args.baseline.resolve()
 assert baseline.is_relative_to(root.resolve())
 baseline_version = json.loads((baseline / "_internal/version.json").read_text())["version"]
-assert baseline_version in {"1.0.4", "2.0.0", "2.1.0", "2.1.1", "2.1.2"}, baseline_version
+assert baseline_version in {"1.0.4", "2.0.0", "2.1.0", "2.1.1", "2.1.2", "2.1.3"}, baseline_version
 shutil.copytree(baseline, app)
 fixture = root / "build/v2-fixtures/sample.mp4"
 history = output / "原有的视频.mp4"
@@ -38,7 +40,9 @@ settings = {"output": str(output), "auto_update": False, "auto_login": False, "b
 (data / "settings.json").write_text(json.dumps(settings), encoding="utf-8")
 (data / "WebProfile/preserve-marker.txt").write_text("existing profile is not removed", encoding="utf-8")
 installer = cache / "verified-qa-installer.exe"
-shutil.copy2(root / "build/v2-qa-installer/VideoDownloader-Windows-Setup.exe", installer)
+candidate = args.installer.resolve()
+assert candidate.is_relative_to((root / "build").resolve()) and candidate.is_file(), candidate
+shutil.copy2(candidate, installer)
 helper = cache / "independent-helper.exe"
 shutil.copy2(root / "dist/v2/VideoDownloader/update-helper.exe", helper)
 nonce = uuid.uuid4().hex
@@ -92,8 +96,9 @@ finally:
         subprocess.run(["taskkill", "/PID", str(ready["pid"]), "/T", "/F"], capture_output=True,
                        creationflags=subprocess.CREATE_NO_WINDOW, timeout=15)
     import winreg
-    qa_key = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\LocalVideoDownloader-V2-Isolated-QA_is1"
-    try:
-        winreg.DeleteKeyEx(winreg.HKEY_CURRENT_USER, qa_key, winreg.KEY_WOW64_64KEY)
-    except FileNotFoundError:
-        pass
+    for qa_key in (r"Software\Microsoft\Windows\CurrentVersion\Uninstall\LocalVideoDownloader-V2-Isolated-QA_is1",
+                   r"Software\LocalVideoDownloader-V2-Isolated-QA"):
+        try:
+            winreg.DeleteKeyEx(winreg.HKEY_CURRENT_USER, qa_key, winreg.KEY_WOW64_64KEY)
+        except FileNotFoundError:
+            pass

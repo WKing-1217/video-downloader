@@ -1,15 +1,18 @@
 """Queued QProcess downloads and unchanged site-scoped browser authentication."""
 from collections import deque
 from dataclasses import dataclass, field
+import hashlib
 import json
 import os
 from pathlib import Path
 import subprocess
 import time
 import uuid
+from types import SimpleNamespace
 
 from PySide6.QtCore import QObject, QProcess, QProcessEnvironment, QTimer, Signal
 from async_jobs import BackgroundPool
+from export_preferences import export_preferences
 from platform_links import PLATFORMS, download_link
 from runtime_paths import APP_DIR, data_dir, read_settings, save_settings, worker_command
 
@@ -129,6 +132,10 @@ class DownloadTask:
     platform: object
     key: str
     output: Path
+    mode: str = "video"
+    options: dict = field(default_factory=dict)
+    local_path: str = ""
+    created: float = field(default_factory=time.monotonic)
     id: str = field(default_factory=lambda: uuid.uuid4().hex)
     title: str = "正在解析作品"
     state: str = "queued"
@@ -168,7 +175,7 @@ class DownloadManager(QObject):
     def busy(self):
         return bool(self.active or self.queue or self.catalogue_jobs.active)
 
-    def submit(self, text, *, force=False):
+    def submit(self, text, *, force=False, mode="video", options=None):
         if self.output_locked:
             self.rejected.emit("正在迁移视频，完成后即可下载。")
             return None
@@ -177,20 +184,69 @@ class DownloadManager(QObject):
         except ValueError as error:
             self.rejected.emit(str(error))
             return None
+        if mode not in {"video", "audio"}:
+            self.rejected.emit("请选择视频或 MP3。")
+            return None
+        settings = export_preferences(options)
+        if mode == "audio":
+            key += f"|audio:{settings['audio_bitrate']}"
+        elif settings["video_format"] != "mp4" or settings["image_format"] != "png" or settings["audio_bitrate"] != 192:
+            key += f"|video:{settings['video_format']}:{settings['image_format']}:{settings['audio_bitrate']}"
+        task = DownloadTask(url, platform, key, self.output, mode=mode, options=settings)
+        return self._enqueue(task, force=force)
+
+    def extract_audio(self, path, *, force=False, options=None):
+        if self.output_locked:
+            self.rejected.emit("正在迁移作品，完成后即可提取 MP3。")
+            return None
+        source = Path(path).resolve()
+        try:
+            if not source.is_file() or source.suffix.lower() not in {".mp4", ".mkv", ".mov", ".webm", ".m4v", ".avi", ".flv", ".ts"}:
+                raise ValueError("请选择可用的本地视频文件。")
+            stat = source.stat()
+        except (OSError, ValueError) as error:
+            self.rejected.emit(str(error))
+            return None
+        settings = export_preferences(options)
+        identity = f"{source}|{stat.st_size}|{stat.st_mtime_ns}"
+        key = "local:" + hashlib.sha256(identity.encode()).hexdigest() + f"|audio:{settings['audio_bitrate']}"
+        task = DownloadTask(str(source), SimpleNamespace(key="local", label="本地视频"), key, self.output,
+                            mode="audio", options=settings, local_path=str(source), title=source.stem,
+                            message="等待提取 MP3")
+        return self._enqueue(task, force=force)
+
+    def _enqueue(self, task, *, force=False):
+        if self.closing:
+            return None
+        key = task.key
         if key in self.pending_keys:
             self.rejected.emit("这条链接已在任务中，不会重复创建下载。")
             return None
         if not force:
             existing = self.store.find_source(key)
-            if existing:
+            if existing and self._compatible_export(existing, task):
                 self.duplicate.emit(existing)
                 return None
-        task = DownloadTask(url, platform, key, self.output)
         self.pending_keys.add(key)
         self.queue.append(task)
         self.queue_changed.emit()
         QTimer.singleShot(0, self._next)
         return task
+
+    @staticmethod
+    def _compatible_export(item, task):
+        if task.mode == "audio":
+            return Path(item.get("path", "")).suffix.lower() == ".mp3"
+        if item.get("kind") == "gallery":
+            try:
+                metadata = json.loads(item.get("metadata") or "{}")
+            except (ValueError, TypeError):
+                return False
+            if metadata.get("image_format") != task.options["image_format"] or metadata.get("video_format") != task.options["video_format"]:
+                return False
+            music = [asset for asset in metadata.get("assets", []) if asset.get("kind") == "music"]
+            return all(asset.get("audio_bitrate") == task.options["audio_bitrate"] * 1000 for asset in music)
+        return Path(item.get("path", "")).suffix.lower() == "." + task.options["video_format"]
 
     def _next(self):
         if self.active or self.closing or not self.queue:
@@ -199,7 +255,7 @@ class DownloadManager(QObject):
             return
         task = self.active = self.queue.popleft()
         self.last = task
-        task.state, task.message = "running", "正在连接 " + task.platform.label
+        task.state, task.message = "running", "正在提取 MP3…" if task.local_path else "正在连接 " + task.platform.label
         process = self.process = QProcess(self)
         process._buffer, process._stderr = b"", b""
         process.setWorkingDirectory(str(APP_DIR))
@@ -211,13 +267,17 @@ class DownloadManager(QObject):
         process.readyReadStandardError.connect(lambda: self._errors(process))
         process.finished.connect(lambda code, status: self._finished(process, task, code))
         process.errorOccurred.connect(lambda error: self._process_error(process, task, error))
-        extra, snapshot = self.accounts.arguments(task.platform)
+        extra, snapshot = ([], None) if task.local_path else self.accounts.arguments(task.platform)
         if snapshot:
             def send():
                 process.write(json.dumps(snapshot, ensure_ascii=False).encode("utf-8"))
                 process.closeWriteChannel()
             process.started.connect(send)
-        executable, args = self.command_factory([task.url, *extra])
+        arguments = ["--extract-audio", task.local_path] if task.local_path else [task.url, *extra]
+        arguments += ["--mode", task.mode, "--video-format", task.options.get("video_format", "mp4"),
+                      "--image-format", task.options.get("image_format", "png"),
+                      "--audio-bitrate", str(task.options.get("audio_bitrate", 192))]
+        executable, args = self.command_factory(arguments)
         process.start(executable, args)
         self.changed.emit(task)
         self.queue_changed.emit()
@@ -255,7 +315,7 @@ class DownloadManager(QObject):
             task.total = int(event.get("total") or 0)
             task.speed = float(event.get("speed") or 0)
             task.eta = event.get("eta")
-            task.message = "正在下载视频 / 音频"
+            task.message = "正在下载音频…" if task.mode == "audio" else "正在下载视频 / 音频"
         elif kind == "complete":
             task.result = event
             task.title = event.get("title") or task.title
@@ -299,14 +359,14 @@ class DownloadManager(QObject):
 
     def _saved(self, task, identifier):
         self.pending_keys.discard(task.key)
-        task.state, task.message = "done", "下载完成，可前往我的视频查看。"
+        task.state, task.message = "done", "MP3 已保存，可前往我的视频查看。" if task.mode == "audio" else "下载完成，可前往我的视频查看。"
         task.result["library_id"] = identifier
         self.changed.emit(task)
         self.completed.emit(task.result)
 
     def _save_error(self, task, error):
         self.pending_keys.discard(task.key)
-        task.state, task.message = "done", "视频已完整保存，但入库失败；请打开保存文件夹或刷新视频库。"
+        task.state, task.message = "done", "文件已完整保存，但入库失败；请打开保存文件夹或刷新视频库。"
         self.log.emit("视频库：" + error)
         self.changed.emit(task)
         self.completed.emit(task.result)
@@ -330,10 +390,16 @@ class DownloadManager(QObject):
             process.kill()
         QTimer.singleShot(2000, lambda: process.state() != QProcess.NotRunning and process.kill() if self.process is process else None)
 
-    def clear_queue(self):
+    def clear_queue(self, mode=None):
+        kept = deque()
         for task in self.queue:
-            self.pending_keys.discard(task.key)
-        self.queue.clear()
+            if mode is None or task.mode == mode:
+                self.pending_keys.discard(task.key)
+                task.state, task.message, task.cancelled = "cancelled", "已移出队列，可重试。", True
+                self.changed.emit(task)
+            else:
+                kept.append(task)
+        self.queue = kept
         self.queue_changed.emit()
 
     def shutdown(self):

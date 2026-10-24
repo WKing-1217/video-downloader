@@ -9,6 +9,14 @@ from ui_theme import COLORS, DIALOG, RAIL, SPACE, icon
 from ui_widgets import text_label
 
 
+NAVIGATION_ITEMS = (
+    (0, "下载", "compose"),
+    (3, "提取 MP3", "audio"),
+    (1, "我的视频", "library-stack"),
+    (2, "软件更新", "nav-update"),
+)
+
+
 class FadingTitleDelegate(QStyledItemDelegate):
     def paint(self, painter, option, index):
         view = self.parent()
@@ -157,8 +165,8 @@ class NavigationSidebar(QFrame):
         self.navigation = {}
         self.group = QButtonGroup(self)
         self.group.setExclusive(True)
-        for page, (title, image) in enumerate((("下载", "compose"),
-                                             ("我的视频", "library-stack"), ("软件更新", "nav-update"))):
+        self.navigation_titles = {page: title for page, title, _ in NAVIGATION_ITEMS}
+        for page, title, image in NAVIGATION_ITEMS:
             button = self.action(image, title, size=RAIL["button_size"], image_size=RAIL["icon_size"])
             button.setObjectName("railButton")
             button.setCheckable(True)
@@ -211,7 +219,7 @@ class NavigationSidebar(QFrame):
         self.body.setStretch(self.body.count() - 2, 0 if expanded and self.rows else 1)
         for page, button in self.navigation.items():
             button.setObjectName("sidebarNav" if expanded else "railButton")
-            button.setText(("下载", "我的视频", "软件更新")[page] if expanded else "")
+            button.setText(self.navigation_titles[page] if expanded else "")
             button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon if expanded else Qt.ToolButtonIconOnly)
             button.setIconSize(QSize(RAIL["expanded_icon"] if expanded else RAIL["icon_size"],
                                      RAIL["expanded_icon"] if expanded else RAIL["icon_size"]))

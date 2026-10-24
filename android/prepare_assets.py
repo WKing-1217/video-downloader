@@ -17,7 +17,8 @@ java_version.write_text('package com.localvideodownloader.app;\npublic final cla
                        + '  public static final String REPOSITORY = ' + json.dumps(identity['repository']) + ';\n'
                        + '  public static final String UPDATE_URL = "https://github.com/" + REPOSITORY + "/releases/latest/download/update.json";\n}\n', encoding="utf-8")
 modules = ["downloader.py", "platform_links.py", "douyin_adapter.py", "douyin_gallery.py",
-           "browser_accounts.py", "network_settings.py", "runtime_paths.py", "parallel_http.py", "bilibili_adapter.py"]
+           "browser_accounts.py", "network_settings.py", "runtime_paths.py", "parallel_http.py", "bilibili_adapter.py",
+           "media_export.py"]
 for name in modules:
     shutil.copy2(source / name, engine / name)
 shutil.copy2(root / "android_bootstrap.py", engine / "android_bootstrap.py")

@@ -26,7 +26,7 @@ worker.write_text('''import json,os,sys,time,shutil
 from pathlib import Path
 sys.path.insert(0,'''+repr(str(root))+''')
 from downloader import verify_media
-def emit(kind,**data):print(json.dumps(dict(event=kind,**data),ensure_ascii=False),flush=True)
+def emit(event,**data):print(json.dumps(dict(event=event,**data),ensure_ascii=False),flush=True)
 out=Path(os.environ['VIDEO_DOWNLOADER_OUTPUT']);out.mkdir(exist_ok=True)
 sample=Path('''+repr(str(sample))+''')
 key=sys.argv[1].split('/video/')[-1].split('?')[0]
@@ -37,7 +37,6 @@ with sample.open('rb') as src,destination.open('wb') as dst:
  while data:=src.read(65536):
   dst.write(data);done+=len(data);emit('progress',downloaded=done,total=total,speed=655360,eta=(total-done)/655360);time.sleep(.05)
 result=verify_media(destination,6);result.update(title='测试下载 '+key,platform='bilibili')
-destination.with_suffix('.mp4.info.json').write_text(json.dumps(result),encoding='utf-8')
 emit('complete',**result)
 ''',encoding='utf-8')
 app=QApplication([]);prepare_fonts()
@@ -57,7 +56,14 @@ def check(name,condition):
  assert condition,name
  proof['checks'][name]=True
 try:
- check('default_download_page',window.pages.currentIndex()==0 and len(window.navigation)==3)
+ check('default_download_page',window.pages.currentIndex()==0 and len(window.navigation)==4)
+ check('download_home_has_no_mp3_switch',not hasattr(window.download_page,'mode') and not hasattr(window.download_page,'local_audio'))
+ window.url.setText('下载页保留内容')
+ window.set_page(3);window.audio_page.url.setText('提取页保留内容')
+ check('mp3_navigation_selects_independent_page',window.pages.currentWidget() is window.audio_page and window.navigation[3].isChecked() and window.audio_page.local_audio.isVisible())
+ window.set_page(0)
+ check('independent_inputs_survive_navigation',window.url.text()=='下载页保留内容' and window.audio_page.url.text()=='提取页保留内容')
+ window.url.clear();window.audio_page.url.clear()
  check('vector_navigation_and_settings_icons',not icon('settings').pixmap(20,20).isNull())
  app.clipboard().setText('https://www.bilibili.com/video/BV1yUFPzKEC7')
  QTest.qWait(50);check('does_not_watch_system_clipboard',not window.downloads.busy())

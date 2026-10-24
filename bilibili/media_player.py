@@ -32,6 +32,9 @@ from ui_theme import COLORS, METRICS, SPACE, icon
 from ui_widgets import ElidedLabel, clock_text, text_label
 
 
+AUDIO_EXTENSIONS = frozenset({".mp3", ".m4a", ".aac", ".flac", ".ogg", ".opus", ".wav", ".wma"})
+
+
 class VideoSurface(QWidget):
     """Qt's local decoder feeds a native widget, including software/remote GPUs."""
     def __init__(self, parent=None):
@@ -83,10 +86,14 @@ class MediaWindow(QDialog):
 
 class PlayerDialog(MediaWindow):
     delete_requested = Signal()
+    export_audio_requested = Signal()
 
     def __init__(self, path, title="", parent=None):
+        media_path = Path(path)
+        if media_path.suffix.casefold() in AUDIO_EXTENSIONS:
+            raise ValueError("音频请使用默认播放器打开。")
         super().__init__(parent)
-        self.path = Path(path)
+        self.path = media_path
         self.setWindowTitle(title or self.path.stem)
         self.resize(960, 630)
         self.setMinimumSize(640, 420)
@@ -98,6 +105,10 @@ class PlayerDialog(MediaWindow):
         heading = QHBoxLayout()
         heading.addWidget(ElidedLabel(title or self.path.stem, role="taskTitle"), 1)
         heading.addWidget(text_label("本地播放", role="caption"))
+        self.export_audio_button = QPushButton("导出 MP3")
+        self.export_audio_button.clicked.connect(self.request_export_audio)
+        self.export_audio_button.setEnabled(self.path.is_file())
+        heading.addWidget(self.export_audio_button)
         self.delete_button = QToolButton()
         self.delete_button.setObjectName("sidebarAction")
         self.delete_button.setIcon(icon("trash", COLORS["text"]))
@@ -171,6 +182,10 @@ class PlayerDialog(MediaWindow):
             self.player.pause()
         else:
             self.player.play()
+
+    def request_export_audio(self):
+        if self.path.is_file():
+            self.export_audio_requested.emit()
 
     def _position(self, position):
         if not self.seek.isSliderDown():
@@ -318,6 +333,8 @@ class GalleryDialog(MediaWindow):
         else:
             self.preview.setPixmap(QPixmap())
             self.preview.setText("点击下方按钮播放实况视频或配乐。" if path.is_file() else "文件已被移动或删除。")
+            self.open_button.setText("使用默认播放器播放" if asset["kind"] == "music" or path.suffix.casefold() in AUDIO_EXTENSIONS
+                                     else "在软件内播放选中媒体")
             self.open_button.setEnabled(path.is_file())
             self.open_button.show()
 
@@ -325,6 +342,11 @@ class GalleryDialog(MediaWindow):
         index = self.list.currentRow()
         if 0 <= index < len(self.assets):
             asset = dict(self.assets[index])
+            path = Path(asset["path"])
+            if asset["kind"] == "music" or path.suffix.casefold() in AUDIO_EXTENSIONS:
+                if path.is_file():
+                    QDesktopServices.openUrl(QUrl.fromLocalFile(str(path.resolve())))
+                return
             self.release_selected_media()
             self.media = PlayerDialog(asset["path"], self.windowTitle(), self)
             self.media.delete_requested.connect(lambda: self.asset_delete_requested.emit(self.item, asset))

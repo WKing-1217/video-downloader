@@ -15,11 +15,15 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 import java.util.ArrayList;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.ConcurrentHashMap;
 
 public final class DownloadBridge {
     static Activity activity;
     static volatile String sharedText = "";
     static volatile JSONObject result;
+    static final ConcurrentHashMap<String, JSONObject> results = new ConcurrentHashMap<>();
+    static final int PICK_VIDEO_REQUEST = 202;
+    static volatile int pickerBitrate = 192;
     static final ConcurrentLinkedQueue<String> events = new ConcurrentLinkedQueue<>();
 
     static void attach(Activity value) { activity = value; }
@@ -37,18 +41,72 @@ public final class DownloadBridge {
     }
     static void emit(String line) { events.add(line); }
     static void error(String message) {
-        try { emit(new JSONObject().put("event","error").put("message",message).toString()); }
+        error("video", message);
+    }
+    static void error(String mode, String message) {
+        try { emit(new JSONObject().put("event","error").put("mode",mode).put("message",message).toString()); }
         catch (Exception ignored) { }
     }
     public static void start(String text) {
+        start(text, "video", "mp4", "png", 192);
+    }
+    public static void start(String text, String mode, String videoFormat, String imageFormat, int bitrate) {
         if (activity == null) return;
         activity.runOnUiThread(() -> {
-            result = null;
+            if (!DownloadService.isRunning()) results.remove(mode);
             if (Build.VERSION.SDK_INT >= 33 && activity.checkSelfPermission("android.permission.POST_NOTIFICATIONS") != 0)
                 activity.requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, 101);
-            Intent job = new Intent(activity, DownloadService.class).putExtra("text",text);
+            Intent job = new Intent(activity, DownloadService.class).putExtra("text",text).putExtra("mode",mode)
+                    .putExtra("video_format",videoFormat).putExtra("image_format",imageFormat).putExtra("audio_bitrate",bitrate);
             activity.startForegroundService(job);
         });
+    }
+    public static void pickVideo(int bitrate) {
+        if (activity == null) return;
+        if (DownloadService.isRunning()) { error("audio", "请等待当前任务结束后再选择视频。"); return; }
+        pickerBitrate = bitrate;
+        activity.runOnUiThread(() -> {
+            try {
+                Intent picker = new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("video/*")
+                        .addCategory(Intent.CATEGORY_OPENABLE)
+                        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+                activity.startActivityForResult(picker, PICK_VIDEO_REQUEST);
+            } catch (Exception e) { error("audio", "无法打开视频选择器，请使用系统文件应用选择视频。"); }
+        });
+    }
+    static void videoPicked(Uri uri) {
+        if (uri == null) {
+            try { emit(new JSONObject().put("event","local_cancelled").put("mode","audio").toString()); }
+            catch (Exception ignored) { }
+            return;
+        }
+        startLocalAudio(uri, pickerBitrate);
+    }
+    private static void startLocalAudio(Uri uri, int bitrate) {
+        if (activity == null) return;
+        if (DownloadService.isRunning()) { error("audio", "请等待当前任务结束后再提取。"); return; }
+        activity.runOnUiThread(() -> {
+            try {
+                String title = DownloadService.displayName(activity, uri);
+                emit(new JSONObject().put("event","local_selected").put("mode","audio").put("title",title).toString());
+                results.remove("audio");
+                if (Build.VERSION.SDK_INT >= 33 && activity.checkSelfPermission("android.permission.POST_NOTIFICATIONS") != 0)
+                    activity.requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, 101);
+                activity.startForegroundService(new Intent(activity, DownloadService.class).putExtra("mode","audio")
+                        .putExtra("source_uri",uri.toString()).putExtra("source_name",title)
+                        .putExtra("video_format","mp4").putExtra("image_format","png").putExtra("audio_bitrate",bitrate));
+            } catch (Exception e) { error("audio", "无法读取选中的视频，请重新选择。"); }
+        });
+    }
+    public static void extractLastAudio(int bitrate) {
+        JSONObject video = results.get("video");
+        if (video == null || video.optJSONArray("assets") != null || !video.optString("mime").startsWith("video/")) {
+            error("audio", "请先下载一个视频，或选择本地视频提取 MP3。");
+            return;
+        }
+        String uri = video.optString("public_uri");
+        if (uri.isEmpty()) { error("audio", "原视频文件不可用，请重新选择。"); return; }
+        startLocalAudio(Uri.parse(uri), bitrate);
     }
     public static void cancel() { DownloadService.cancelDownload(); }
     public static void checkForUpdates(boolean manual) { AppUpdater.check(manual); }
@@ -88,7 +146,12 @@ public final class DownloadBridge {
         return new JSONObject().put("cookies",cookies);
     }
     public static void openResult(boolean share) {
-        JSONObject saved = result;
+        openResultValue(result, share);
+    }
+    public static void openResultForMode(String mode, boolean share) {
+        openResultValue(results.get(mode), share);
+    }
+    private static void openResultValue(JSONObject saved, boolean share) {
         if (activity == null || saved == null) return;
         activity.runOnUiThread(() -> {
             try {
@@ -100,14 +163,14 @@ public final class DownloadBridge {
                         labels[n] = a.optString("display_name", "文件 " + (n+1));
                     }
                     new AlertDialog.Builder(activity).setTitle("作品文件")
-                            .setItems(labels,(dialog,n)-> { try { view(assets.getJSONObject(n)); } catch(Exception e) { error("无法打开文件："+e.getMessage()); } })
+                            .setItems(labels,(dialog,n)-> { try { view(assets.getJSONObject(n)); } catch(Exception e) { error(saved.optString("mode","video"),"无法打开文件："+e.getMessage()); } })
                             .setNegativeButton("关闭",null).show();
                 } else if (share) {
                     ArrayList<Uri> uris = new ArrayList<>();
                     if (assets != null) for(int n=0;n<assets.length();n++) uris.add(Uri.parse(assets.getJSONObject(n).getString("public_uri")));
                     else uris.add(Uri.parse(saved.getString("public_uri")));
                     Intent intent = new Intent(uris.size()>1 ? Intent.ACTION_SEND_MULTIPLE : Intent.ACTION_SEND);
-                    intent.setType(assets!=null ? "*/*" : "video/*");
+                    intent.setType(assets!=null ? "*/*" : saved.optString("mime", "application/octet-stream"));
                     if (uris.size()>1) intent.putParcelableArrayListExtra(Intent.EXTRA_STREAM,uris);
                     else intent.putExtra(Intent.EXTRA_STREAM,uris.get(0));
                     intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
@@ -116,7 +179,7 @@ public final class DownloadBridge {
                     intent.setClipData(clips);
                     activity.startActivity(Intent.createChooser(intent,"分享下载文件"));
                 } else view(saved);
-            } catch(Exception e) { error("无法打开文件，可在系统“下载”中查看。" ); }
+            } catch(Exception e) { error(saved.optString("mode","video"),"无法打开文件，可在系统“下载”中查看。" ); }
         });
     }
     private static void view(JSONObject file) throws Exception {

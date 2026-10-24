@@ -118,8 +118,9 @@ class LibraryTests(unittest.TestCase):
         identifier = self.store.upsert(folder, info, completed=True)
         return folder, files, identifier
 
-    def test_single_image_delete_updates_receipt_and_does_not_reappear(self):
+    def test_single_image_delete_updates_database_and_does_not_reappear(self):
         folder, files, identifier = self.album()
+        receipt = (folder / "作品信息.json").read_bytes()
         updated = self.store.delete_asset(identifier, files[0])
         self.assertFalse(files[0].exists())
         self.assertTrue(files[1].is_file())
@@ -128,15 +129,20 @@ class LibraryTests(unittest.TestCase):
         self.assertEqual(content["assets"][0]["path"], str(files[1]))
         self.assertEqual(updated["size"], files[1].stat().st_size)
         self.assertEqual(updated["thumb"], "")
+        self.assertEqual((folder / "作品信息.json").read_bytes(), receipt)
         self.store.scan()
         self.assertEqual(len(json.loads(self.store.get(identifier)["metadata"])["assets"]), 1)
         self.assertFalse(list(folder.glob(".delete-*")))
 
-    def test_last_image_delete_removes_empty_album(self):
+    def test_last_image_delete_preserves_existing_legacy_receipt(self):
         folder, files, identifier = self.album(1)
+        receipt = (folder / "作品信息.json").read_bytes()
         updated = self.store.delete_asset(identifier, files[0])
-        self.assertFalse(folder.exists())
+        self.assertFalse(files[0].exists())
+        self.assertEqual((folder / "作品信息.json").read_bytes(), receipt)
         self.assertTrue(updated["hidden"])
+        self.assertFalse(self.store.rows())
+        self.store.scan()
         self.assertFalse(self.store.rows())
 
     def test_last_image_delete_keeps_unrecorded_notes(self):
@@ -145,7 +151,7 @@ class LibraryTests(unittest.TestCase):
         notes.write_bytes(b"personal notes")
         self.store.delete_asset(identifier, files[0])
         self.assertEqual(notes.read_bytes(), b"personal notes")
-        self.assertFalse((folder / "作品信息.json").exists())
+        self.assertTrue((folder / "作品信息.json").exists())
 
     def test_unrecorded_file_cannot_be_deleted_as_an_image(self):
         folder, files, identifier = self.album()

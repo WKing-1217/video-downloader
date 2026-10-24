@@ -1,19 +1,19 @@
-"""Export the original assets of a Douyin photo/LivePhoto post.
+"""Export verified assets of a Douyin photo/LivePhoto post.
 
-Photos, LivePhoto clips and background music remain separate original files.
+Photos, LivePhoto clips and background music remain separate media files.
 An album never passes through the complete-video duration check.
 """
 import hashlib
-import json
 import math
 from pathlib import Path
-import subprocess
+import tempfile
 from urllib.parse import urlparse
 
 from yt_dlp.networking import Request
 from yt_dlp.utils import sanitize_filename
 from network_settings import windows_system_proxy
-from runtime_paths import tool
+from media_export import (export_image, export_video, extract_audio, full_decode,
+                          validate_options)
 
 
 def gallery_proxies():
@@ -159,69 +159,100 @@ def _extension(asset, probe):
     return {"mp3": "mp3", "flac": "flac", "opus": "opus", "vorbis": "ogg"}.get(codec, "wav" if "wav" in container else "aac")
 
 
-def download_gallery(info, ydl, output, emit, probe_media):
+def download_gallery(info, ydl, output, emit, probe_media, *, mode="video", video_format="mp4",
+                     image_format="png", audio_bitrate=192, source_key=None):
+    validate_options(mode, video_format, image_format, audio_bitrate)
+    output = Path(output)
     assets = info["_douyin_gallery"]
     title = info.get("title") or "抖音图文"
+    if mode == "audio":
+        assets = [asset for asset in assets if asset["kind"] == "music"]
+        if not assets:
+            raise ValueError("这条图文作品没有可提取的背景音乐，请选择带配乐的作品或视频。")
     safe = sanitize_filename(title, restricted=False).encode("utf-8")[:100].decode("utf-8", errors="ignore").rstrip(" .")
-    folder = output / f"{safe or '抖音图文'} [{info['id']}]"
-    folder.mkdir(parents=True, exist_ok=True)
-    emit("metadata", title=title, content_type="gallery", image_count=info["image_count"],
+    name = f"{safe or '抖音图文'} [{info['id']}]"
+    output.mkdir(parents=True, exist_ok=True)
+    emit("metadata", title=title, content_type="audio" if mode == "audio" else "gallery", image_count=info["image_count"],
          live_photo_count=sum(a["kind"] == "live_photo" for a in assets))
     saved = []
-    pending = output / ".downloads" / ("gallery-" + str(info["id"]))
-    pending.mkdir(parents=True, exist_ok=True)
-    for number, asset in enumerate(assets, 1):
-        emit("stage", message=f"正在导出 {number}/{len(assets)} · {asset['name']}…")
-        temporary = pending / (asset["name"] + ".part")
-        verified = None
-        failure = None
-        for url in asset["urls"]:
-            try:
-                with ydl.urlopen(Request(url, proxies=gallery_proxies(), headers={"Referer": "https://www.douyin.com/",
-                                                       "Accept-Encoding": "identity"})) as response, temporary.open("wb") as out:
-                    expected_size = int(response.headers.get("Content-Length") or 0)
-                    written = 0
-                    while chunk := response.read(256 * 1024):
-                        out.write(chunk)
-                        written += len(chunk)
-                    if not written or (expected_size and written != expected_size):
-                        raise ValueError("传输未完成。")
-                    if asset.get("expected_size") and written != int(asset["expected_size"]):
-                        raise ValueError("实况视频大小与源站不一致。")
-                probe = probe_media(temporary)
-                verified = verify_asset(temporary, asset, probe)
-                # Full decode catches truncated JPEGs and damaged media packets.
-                decoded = subprocess.run([tool("ffmpeg"), "-v", "error", "-xerror", "-i", str(temporary),
-                                          "-f", "null", "-"], capture_output=True, timeout=90,
-                                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-                if decoded.returncode:
-                    raise ValueError("文件解码检查失败。")
-                final = folder / (asset["name"] + "." + _extension(asset, probe))
-                with temporary.open("rb") as source:
-                    digest = hashlib.sha256()
-                    for chunk in iter(lambda: source.read(1024 * 1024), b""):
-                        digest.update(chunk)
-                verified.update(path=str(final.resolve()), full_decode=True, sha256=digest.hexdigest())
-                temporary.replace(final)
-                saved.append(verified)
-                break
-            except Exception as exc:
-                failure = exc
-                verified = None
-        if verified is None:
-            raise ValueError(f"{asset['name']}导出失败，作品尚未完整保存；请重新下载或登录抖音后重试。") from failure
+    pending_root = output / ".downloads"
+    pending_root.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="gallery-" + str(info["id"]) + "-", dir=pending_root) as pending:
+        folder = output if mode == "audio" else Path(pending) / "album"
+        folder.mkdir(parents=True, exist_ok=True)
+        for number, asset in enumerate(assets, 1):
+            emit("stage", message=f"正在导出 {number}/{len(assets)} · {asset['name']}…")
+            temporary = Path(pending) / (asset["name"] + ".part")
+            verified = None
+            failure = None
+            for url in asset["urls"]:
+                try:
+                    with ydl.urlopen(Request(url, proxies=gallery_proxies(), headers={"Referer": "https://www.douyin.com/",
+                                                           "Accept-Encoding": "identity"})) as response, temporary.open("wb") as out:
+                        expected_size = int(response.headers.get("Content-Length") or 0)
+                        written = 0
+                        while chunk := response.read(256 * 1024):
+                            out.write(chunk)
+                            written += len(chunk)
+                        if not written or (expected_size and written != expected_size):
+                            raise ValueError("传输未完成。")
+                        if asset.get("expected_size") and written != int(asset["expected_size"]):
+                            raise ValueError("实况视频大小与源站不一致。")
+                    probe = probe_media(temporary)
+                    verify_asset(temporary, asset, probe)
+                    full_decode(temporary)
+                    if asset["kind"] == "image":
+                        verified = export_image(temporary, folder, image_format=image_format, title=asset["name"])
+                    elif asset["kind"] == "live_photo":
+                        verified = export_video(temporary, folder, video_format=video_format,
+                                                expected=asset["duration"], require_audio=False, title=asset["name"])
+                    else:
+                        verified = extract_audio(temporary, folder, bitrate=audio_bitrate,
+                                                 title=name if mode == "audio" else asset["name"])
+                        verified.pop("source_path", None)
+                    final = Path(verified["path"])
+                    # Verify dimensions and source duration again after conversion.
+                    verify_asset(final, asset, probe_media(final))
+                    with final.open("rb") as source:
+                        digest = hashlib.sha256()
+                        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                            digest.update(chunk)
+                    verified.update(kind=asset["kind"], sha256=digest.hexdigest())
+                    if asset.get("index"):
+                        verified["index"] = asset["index"]
+                    saved.append(verified)
+                    break
+                except Exception as exc:
+                    failure = exc
+                    verified = None
+            if verified is None:
+                raise ValueError(f"{asset['name']}导出失败，作品尚未完整保存；请重新下载或登录抖音后重试。") from failure
+        if mode != "audio":
+            destination, number = output / name, 2
+            while True:
+                if destination.exists():
+                    destination = output / f"{name} ({number})"
+                    number += 1
+                    continue
+                try:
+                    folder.rename(destination)
+                    break
+                except FileExistsError:
+                    destination = output / f"{name} ({number})"
+                    number += 1
+            folder = destination
+            for asset in saved:
+                asset["path"] = str((folder / Path(asset["path"]).name).resolve())
+    if mode == "audio":
+        result = {**saved[0], "kind": "audio", "content_type": "audio", "platform": "douyin", "id": info["id"],
+                  "title": title, "source_key": source_key}
+        emit("complete", **result)
+        return result
     result = {"content_type": "gallery", "platform": "douyin", "id": info["id"], "title": title,
               "path": str(folder.resolve()), "image_count": info["image_count"],
               "live_photo_count": sum(a["kind"] == "live_photo" for a in saved),
               "music_count": sum(a["kind"] == "music" for a in saved), "assets": saved,
-              "size": sum(a["size"] for a in saved)}
-    receipt = folder / "作品信息.json"
-    pending_receipt = receipt.with_suffix(".tmp")
-    pending_receipt.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
-    pending_receipt.replace(receipt)
-    try:
-        pending.rmdir()
-    except OSError:
-        pass
+              "size": sum(a["size"] for a in saved), "source_key": source_key,
+              "image_format": image_format, "video_format": video_format}
     emit("complete", **result)
     return result
