@@ -1,6 +1,6 @@
 # 视频下载器
 
-Windows v2.1.4 与 Android v1.0.5 同步提供独立 MP3 提取页和导出格式设置，沿用简约蓝灰界面。自动识别 Bilibili、抖音和 X，支持视频、抖音图文、实况及配乐；完成校验后保存，新导出只保留媒体文件。
+Windows v2.1.5 新增 Instagram 单视频和 YouTube / Shorts 链接下载，沿用简约蓝灰界面、MP3 提取与导出格式设置。Bilibili、抖音、X 和抖音图文功能继续保留；完成校验后保存，新导出只保留媒体文件。Android APK 保持 v1.0.5，本次新增平台仅在 Windows 提供。
 
 ## 下载
 
@@ -51,3 +51,11 @@ Windows 源码验证包含 120 项单元检查、32 项下载内核冒烟、27 �
 
 在线 MP3 的 Bilibili 公开链接测试被站点 HTTP 412 拒绝，尚未完成在线下载验收；链接音轨选择及转换已用受控解析器和真实 FFmpeg 验证，本地 MP4 提取已实测。抖音与 X 的真实在线 MP3 尚未实测。Android ARM 实机、Windows 10 实机、双屏热切换和长期大规模媒体库压力测试尚未覆盖。
 
+
+## Instagram 与 YouTube（Windows 2.1.5）
+
+新增 Instagram Reel/单视频帖子、YouTube 普通视频/Shorts/youtu.be 单条链接识别；沿用原下载队列、取消、重试、MP4/MP3 导出及视频库。分享追踪参数会清除，同一视频不同链接去重。频道、播放列表、直播和 Instagram 图片/轮播尚不在本次验收范围。
+
+Windows 安装包内置 Node.js 与匹配的 yt-dlp-ejs 脚本，无需另装 JavaScript 环境；源码运行使用 `yt-dlp[default]` 与 Node.js 22+（或 Deno），本地 Node 可放在 `bilibili/tools/node.exe`，也可加入 PATH。Windows 下载尊重系统代理；网页登录与浏览器读取继续按站点隔离。
+
+Instagram 公开响应有时省略时长，下载传输完成后读取实际媒体时长并完整解码，验证后再导出。平台明确返回无音轨的视频可保存为无声视频，完成状态会说明；不伪造音轨，无音轨不能提取 MP3。提供的两条链接实际导出结果见 [新增平台验收](bilibili/SOCIAL_REVIEW.md)。Android 现有 APK 未加入这两个平台，不沿用 Windows 验收结论。

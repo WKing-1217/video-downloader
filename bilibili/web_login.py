@@ -66,7 +66,8 @@ class WebLogin(QObject):
         view.setPage(page)
         window.setCentralWidget(view)
         start = {"bilibili": "https://www.bilibili.com/", "douyin": "https://www.douyin.com/",
-                 "x": "https://x.com/i/flow/login"}
+                 "x": "https://x.com/i/flow/login", "instagram": "https://www.instagram.com/accounts/login/",
+                 "youtube": "https://www.youtube.com/"}
         view.setUrl(QUrl(url or start[key]))
         self.windows.append(window)
         window.show()

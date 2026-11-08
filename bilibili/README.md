@@ -1,6 +1,6 @@
-# 视频下载器 Windows v2.1.4
+# 视频下载器 Windows v2.1.5
 
-原生 Qt / PySide6 桌面应用，支持 Bilibili、抖音、X。自动选择当前权限下最高可用画质与音质，完成检查后入库；保留抖音图文、实况与配乐。Android 客户端同步升级至 v1.0.5。
+原生 Qt / PySide6 桌面应用，Windows 支持 Bilibili、抖音、X、Instagram 单视频与 YouTube / Shorts。自动选择当前权限下最高可用画质与音质，完成检查后入库；保留抖音图文、实况与配乐。Android APK 保持 v1.0.5，本次新增平台仅在 Windows 提供。
 
 v2.1.4 新增 MP3 提取与导出格式设置。双击“预览MP3与格式.bat”可使用隔离的设置与示例文件检查界面。功能与验收记录见 [MP3 与导出格式](EXPORT_REVIEW.md)。
 
@@ -13,7 +13,7 @@ v2.1.4 新增 MP3 提取与导出格式设置。双击“预览MP3与格式.bat�
 
 Windows 10 / 11 x64 双击项目根目录 `release/VideoDownloader-Windows-Setup.exe`，安装到原目录即可升级。安装包内含运行环境、FFmpeg、Qt 播放和网页登录组件，无需安装 Python。
 
-Windows v2.1.4 沿用蓝灰色设计系统、白色输入区及统一线条图标。可双击同目录的“预览新版UI.bat”打开隔离的设计预览，细节见 [UI 验收记录](UI_REVIEW.md)。
+Windows v2.1.5 沿用蓝灰色设计系统、白色输入区及统一线条图标。可双击同目录的“预览新版UI.bat”打开隔离的设计预览，细节见 [UI 验收记录](UI_REVIEW.md)。
 
 本轮支持目录迁移、可调侧栏、单向循环长标题与文件删除，播放器可独立切换和最小化、最大化。检查方式与本轮记录见 [存储和删除验收](STORAGE_REVIEW.md)。
 
@@ -73,3 +73,11 @@ B 站样例 BV1yUFPzKEC7 在独立 EXE 里实测：294.785 秒、1920×1080、AV
 本次在 Windows 11 x64 验证，另做 100% / 150% / 200% Qt 离屏检查；Windows 10 实机、双屏热切换和长期大规模库压力测试尚未覆盖。X 与普通抖音保留原下载内核，本次真实回归范围见交付记录。
 
 项目：[WKing-1217/video-downloader](https://github.com/WKing-1217/video-downloader)。第三方许可见 [THIRD_PARTY.txt](packaging/THIRD_PARTY.txt)。
+
+## Instagram 与 YouTube（Windows 2.1.5）
+
+新增 Instagram Reel/单视频帖子、YouTube 普通视频/Shorts/youtu.be 单条链接识别；沿用原下载队列、取消、重试、MP4/MP3 导出及视频库。分享追踪参数会清除，同一视频不同链接去重。频道、播放列表、直播和 Instagram 图片/轮播尚不在本次验收范围。
+
+Windows 安装包内置 Node.js 与匹配的 yt-dlp-ejs 脚本，无需另装 JavaScript 环境；源码运行使用 `yt-dlp[default]` 与 Node.js 22+（或 Deno），本地 Node 可放在 `bilibili/tools/node.exe`，也可加入 PATH。Windows 下载尊重系统代理；网页登录与浏览器读取继续按站点隔离。
+
+Instagram 公开响应有时省略时长，下载传输完成后读取实际媒体时长并完整解码，验证后再导出。平台明确返回无音轨的视频可保存为无声视频，完成状态会说明；不伪造音轨，无音轨不能提取 MP3。双击“预览INS与YouTube.bat”可打开隔离的本地候选程序。提供的两条链接实际导出结果见 [新增平台验收](SOCIAL_REVIEW.md)。Android 现有 APK 未加入这两个平台，不沿用 Windows 验收结论。

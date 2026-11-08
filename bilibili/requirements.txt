@@ -1,5 +1,5 @@
 PySide6>=6.8,<7
-yt-dlp>=2026.8.19
+yt-dlp[default]>=2026.10.26
 certifi>=2024.2.2
 requests>=2.32,<3
 pycryptodomex>=3.23,<4

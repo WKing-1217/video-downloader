@@ -20,11 +20,30 @@ PLATFORMS = {
     "douyin": Platform("douyin", "抖音", (
         "douyin.com", "www.douyin.com", "m.douyin.com", "v.douyin.com", "iesdouyin.com", "www.iesdouyin.com"),
         ("douyin.com", "iesdouyin.com"), ("sessionid", "sessionid_ss", "sid_guard")),
+    "instagram": Platform("instagram", "Instagram", (
+        "instagram.com", "www.instagram.com", "m.instagram.com"),
+        ("instagram.com",), ("sessionid",)),
+    "youtube": Platform("youtube", "YouTube", (
+        "youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com", "youtu.be"),
+        ("youtube.com",), ("SAPISID", "__Secure-1PAPISID", "__Secure-3PAPISID", "LOGIN_INFO")),
     "x": Platform("x", "X / Twitter", (
         "x.com", "www.x.com", "mobile.x.com", "twitter.com", "www.twitter.com",
         "m.twitter.com", "mobile.twitter.com", "t.co"),
         ("x.com", "twitter.com", "t.co"), ("auth_token",)),
 }
+
+
+def youtube_video_id(parsed) -> str | None:
+    """Only single-video routes are accepted, never feeds or playlists."""
+    if (parsed.hostname or "").lower() == "youtu.be":
+        candidate = parsed.path.strip("/") if parsed.path.count("/") <= 2 else ""
+    elif parsed.path.rstrip("/") == "/watch":
+        values = parse_qs(parsed.query).get("v", [])
+        candidate = values[0] if len(values) == 1 else ""
+    else:
+        match = re.fullmatch(r"/(?:shorts|embed|live)/([A-Za-z0-9_-]+)/?", parsed.path)
+        candidate = match.group(1) if match else ""
+    return candidate if re.fullmatch(r"[A-Za-z0-9_-]{11}", candidate) else None
 
 
 def domain_matches(domain: str, roots: tuple[str, ...]) -> bool:
@@ -58,8 +77,18 @@ def resolve_link(text: str) -> tuple[str, Platform]:
         elif site.key == "x" and parsed.hostname.lower() != "t.co":
             # The extractor supports X and Twitter, including /video/2 selectors.
             link = "https://x.com" + parsed.path
+        elif site.key == "instagram":
+            match = re.fullmatch(r"/(reel|reels|p|tv)/([A-Za-z0-9_-]+)/?", parsed.path)
+            if match:
+                kind, post_id = match.groups()
+                kind = "reel" if kind == "reels" else kind
+                link = f"https://www.instagram.com/{kind}/{post_id}/"
+        elif site.key == "youtube":
+            video_id = youtube_video_id(parsed)
+            if video_id:
+                link = "https://www.youtube.com/watch?" + urlencode({"v": video_id})
         return link, site
-    raise ValueError("请粘贴 Bilibili、抖音或 X（Twitter）的视频链接，支持带文字的分享链接。")
+    raise ValueError("请粘贴 Bilibili、抖音、X、Instagram 或 YouTube 的作品链接，支持带文字的分享链接。")
 
 
 def normalize_url(text: str) -> str:
@@ -84,6 +113,19 @@ def download_link(text: str) -> tuple[str, Platform, str]:
     elif site.key == "x" and not short:
         valid = bool(re.fullmatch(r"/[^/]+/status/\d+(?:/video/\d+)?", path))
         host = "x.com"
+    elif site.key == "instagram":
+        match = re.fullmatch(r"/(?:reel|p|tv)/([A-Za-z0-9_-]+)", path)
+        valid = bool(match)
+        if match:
+            # The same Instagram shortcode can be shared as /p/ or /reel/.
+            path = "/p/" + match.group(1)
+        host = "www.instagram.com"
+    elif site.key == "youtube":
+        video_id = youtube_video_id(parsed)
+        if not video_id:
+            raise ValueError("请复制单条 YouTube 视频或 Shorts 链接，暂不支持频道或播放列表。")
+        canonical = "https://www.youtube.com/watch?" + urlencode({"v": video_id})
+        return canonical, site, canonical
     if not valid:
         raise ValueError("这不是具体的视频或作品链接，请复制视频的分享链接。")
     query = parse_qs(parsed.query)

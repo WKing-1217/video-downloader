@@ -134,8 +134,9 @@ class MediaExportTests(unittest.TestCase):
         self.assertTrue(self.video.is_file())
         self.assert_no_sidecars()
 
-    def download_fixture(self, mode, **settings):
-        source = self.audio if mode == "audio" else self.video
+    def download_fixture(self, mode, *, fixture_url="https://www.bilibili.com/video/BV1yUFPzKEC7",
+                         fixture_duration=2, fixture_source=None, fixture_metadata=None, **settings):
+        source = fixture_source or (self.audio if mode == "audio" else self.video)
         options_seen = []
 
         class FakeYDL:
@@ -153,8 +154,11 @@ class MediaExportTests(unittest.TestCase):
                 pass
 
             def extract_info(inner, url, **_):
-                return {"id": "fixture", "title": "本地模拟下载", "duration": 2, "format_id": "best",
-                        "ext": source.suffix[1:], "formats": []}
+                return {"id": "fixture", "title": "本地模拟下载", "duration": fixture_duration, "format_id": "best",
+                        "ext": source.suffix[1:], "formats": [], **(fixture_metadata or {})}
+
+            def process_ie_result(inner, info, **_):
+                return info
 
             def prepare_filename(inner, info):
                 return str(Path(inner.options["paths"]["home"]) / (info["title"] + source.suffix))
@@ -165,9 +169,70 @@ class MediaExportTests(unittest.TestCase):
 
         with patch.object(downloader, "OUTPUT", self.output), patch.object(downloader, "AcceleratedYoutubeDL", FakeYDL), \
                 patch.object(downloader, "windows_system_proxy", return_value=None), patch.object(downloader, "emit"):
-            result = downloader.download("https://www.bilibili.com/video/BV1yUFPzKEC7", auto_cookies=False,
-                                         mode=mode, **settings)
+            result = downloader.download(fixture_url, auto_cookies=False, mode=mode, **settings)
         return result, options_seen[0]
+
+    def test_instagram_unknown_duration_exports_decoded_download(self):
+        original = self.video.read_bytes()
+        result, _ = self.download_fixture("video", fixture_url="https://instagram.com/reel/Deq-gX4SBrF/",
+                                          fixture_duration=None)
+        self.assertEqual(result["platform"], "instagram")
+        self.assertEqual(result["duration_source"], "downloaded_media")
+        self.assertAlmostEqual(result["expected_duration"], 2, delta=.1)
+        self.assertTrue(result["full_decode"])
+        self.assertTrue(Path(result["path"]).is_file())
+        self.assertEqual(self.video.read_bytes(), original)
+        self.assert_no_sidecars()
+
+    def test_instagram_explicit_silent_stream_preserves_silence(self):
+        for duration in (2, None):
+            with self.subTest(duration=duration):
+                result, _ = self.download_fixture("video", fixture_url="https://instagram.com/reel/Deq-gX4SBrF/",
+                                                  fixture_source=self.silent, fixture_duration=duration,
+                                                  fixture_metadata={"acodec": "none", "formats": [{"acodec": "none"}]})
+                streams = probe_media(Path(result["path"]))["streams"]
+                self.assertEqual([item["codec_type"] for item in streams], ["video"])
+                self.assertTrue(result["full_decode"])
+        self.assert_no_sidecars()
+
+    def test_instagram_silent_stream_rejects_audio_extraction(self):
+        with self.assertRaisesRegex(ValueError, "没有音轨.*无法提取 MP3"):
+            self.download_fixture("audio", fixture_url="https://instagram.com/reel/Deq-gX4SBrF/",
+                                  fixture_source=self.silent, fixture_duration=None,
+                                  fixture_metadata={"acodec": "none", "formats": [{"acodec": "none"}]})
+        self.assertFalse(list(self.output.glob("*.mp3")))
+        self.assertFalse(list(self.output.rglob("*.mp4")))
+
+    def test_unknown_duration_does_not_relax_other_platforms(self):
+        for url in ("https://www.bilibili.com/video/BV1yUFPzKEC7", "https://www.douyin.com/video/1234567",
+                    "https://x.com/example/status/1234567", "https://youtube.com/watch?v=dsbT_StiFFU"):
+            with self.subTest(url=url), patch.object(downloader, "js_runtime_options", return_value={"node": {"path": "node"}}):
+                with self.assertRaisesRegex(ValueError, "无法获取完整时长"):
+                    self.download_fixture("video", fixture_url=url, fixture_duration=None)
+        self.assertFalse(list(self.output.glob("*.mp4")))
+
+    def test_unknown_instagram_decode_failure_quarantines_only_worker_file(self):
+        original = self.video.read_bytes()
+        unrelated = self.output / "用户原有视频.mp4"
+        unrelated.write_bytes(b"user media is not worker-owned")
+        with patch("media_export.full_decode", side_effect=ValueError("corrupt decoded frame")):
+            with self.assertRaisesRegex(ValueError, "corrupt decoded frame"):
+                self.download_fixture("video", fixture_url="https://instagram.com/reel/Deq-gX4SBrF/",
+                                      fixture_duration=None)
+        self.assertEqual(list(self.output.glob("*.mp4")), [unrelated])
+        self.assertEqual(unrelated.read_bytes(), b"user media is not worker-owned")
+        quarantined = list((self.output / ".downloads").rglob("未通过校验/*.mp4"))
+        self.assertEqual(len(quarantined), 1)
+        self.assertEqual(quarantined[0].read_bytes(), original)
+        self.assertEqual(self.video.read_bytes(), original)
+        self.assert_no_sidecars()
+
+    def test_instagram_missing_audio_flag_does_not_hide_lost_audio(self):
+        # Only an explicit platform declaration permits a truly silent export.
+        with self.assertRaisesRegex(ValueError, "必须同时包含画面和声音"):
+            self.download_fixture("video", fixture_url="https://instagram.com/reel/Deq-gX4SBrF/",
+                                  fixture_source=self.silent, fixture_duration=None)
+        self.assertFalse(list(self.output.glob("*.mp4")))
 
     def test_link_mp3_uses_audio_selector_and_has_no_video_or_json(self):
         result, options = self.download_fixture("audio", audio_bitrate=320)

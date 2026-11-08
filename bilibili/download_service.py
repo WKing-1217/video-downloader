@@ -106,7 +106,7 @@ class AccountService(QObject):
         return self.web
 
     def open_login(self, platform_key, url=None):
-        self.ensure_web().open(platform_key, url if platform_key == "douyin" else None)
+        self.ensure_web().open(platform_key, url if platform_key in {"douyin", "instagram", "youtube"} else None)
 
     def arguments(self, platform):
         if not self.auto_login:
@@ -360,6 +360,8 @@ class DownloadManager(QObject):
     def _saved(self, task, identifier):
         self.pending_keys.discard(task.key)
         task.state, task.message = "done", "MP3 已保存，可前往我的视频查看。" if task.mode == "audio" else "下载完成，可前往我的视频查看。"
+        if task.result.get("platform") == "instagram" and task.result.get("kind") == "video" and not task.result.get("audio_codec"):
+            task.message = "已保存视频；Instagram 当前提供的媒体不含音轨。"
         task.result["library_id"] = identifier
         self.changed.emit(task)
         self.completed.emit(task.result)

@@ -228,9 +228,9 @@ class MediaDelegate(QStyledItemDelegate):
         painter.setFont(font)
         painter.setPen(QColor(COLORS["muted"]))
         platform = json.loads(item["metadata"]).get("platform", "")
-        description = {"bilibili": "Bilibili", "douyin": "抖音", "x": "X"}.get(platform, "图文作品" if item["kind"] == "gallery" else "本地视频")
+        description = {"bilibili": "Bilibili", "douyin": "抖音", "x": "X", "instagram": "Instagram", "youtube": "YouTube"}.get(platform, "图文作品" if item["kind"] == "gallery" else "本地视频")
         if item["kind"] == "audio":
-            description = Path(item["path"]).suffix.lstrip(".").upper() + (" · " + description if platform in {"bilibili", "douyin", "x"} else "")
+            description = Path(item["path"]).suffix.lstrip(".").upper() + (" · " + description if platform in {"bilibili", "douyin", "x", "instagram", "youtube"} else "")
         elif item["kind"] == "image":
             description = Path(item["path"]).suffix.lstrip(".").upper()
         if item["state"] == "missing":

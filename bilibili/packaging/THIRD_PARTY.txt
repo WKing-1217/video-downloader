@@ -11,6 +11,13 @@ The dynamically linked Qt libraries may be replaced with compatible versions.
 yt-dlp: Unlicense (individual bundled dependencies retain their own licenses).
 https://github.com/yt-dlp/yt-dlp
 
+yt-dlp-ejs: Unlicense, scripts used for YouTube playback challenges.
+https://github.com/yt-dlp/ejs
+
+Node.js v24.19.0 (Windows runtime): MIT and included third-party licenses.
+https://github.com/nodejs/node/tree/v24.19.0
+The full runtime notice is in licenses/Node-v24.19.0-LICENSE.txt.
+
 FFmpeg (Windows build from Gyan, GPL build): GPL-3.0-or-later.
 https://www.ffmpeg.org/legal.html
 https://www.gyan.dev/ffmpeg/builds/

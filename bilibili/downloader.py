@@ -1,10 +1,11 @@
-"""Download a complete Bilibili, Douyin or X video; emit JSON-lines events."""
+"""Download supported single videos and export verified media; emit JSON lines."""
 from __future__ import annotations
 
 import argparse
 from datetime import datetime
 import json
 import hashlib
+import math
 from pathlib import Path
 import sys
 from urllib.parse import urlparse
@@ -17,7 +18,7 @@ from parallel_http import AcceleratedYoutubeDL
 from bilibili_adapter import BiliBiliIE
 from douyin_adapter import DouyinIE
 from douyin_gallery import download_gallery, gallery_proxies
-from runtime_paths import configure_tools, output_dir, tool
+from runtime_paths import configure_tools, output_dir, tool, js_runtime_options
 from media_export import (AUDIO_BITRATES, IMAGE_FORMATS, VIDEO_FORMATS, extract_audio,
                           export_video, probe_media, require_tools, validate_options,
                           verify_audio, verify_video)
@@ -31,8 +32,8 @@ def emit(event: str, **data):
     print(json.dumps({"event": event, **data}, ensure_ascii=False), flush=True)
 
 
-def verify_media(path: Path, expected: float, probe: dict | None = None) -> dict:
-    return verify_video(path, expected, probe)
+def verify_media(path: Path, expected: float, probe: dict | None = None, *, require_audio=True) -> dict:
+    return verify_video(path, expected, probe, require_audio=require_audio)
 
 
 class Logger:
@@ -69,7 +70,7 @@ def preserve_incomplete(path):
     emit("log", message="发现旧文件不完整，已保留到「未通过校验」文件夹，正在重新下载。")
 
 
-def quarantine_incomplete(info, ydl, expected, directory=None, *, kind="video"):
+def quarantine_incomplete(info, ydl, expected, directory=None, *, kind="video", require_audio=True):
     """A failed final file must not make every retry reuse the same bad media."""
     prepared = ydl.prepare_filename(info)
     if directory is not None:
@@ -78,7 +79,10 @@ def quarantine_incomplete(info, ydl, expected, directory=None, *, kind="video"):
         if not path.is_file():
             continue
         try:
-            (verify_audio if kind == "audio" else verify_media)(path, expected)
+            if kind == "audio":
+                verify_audio(path, expected)
+            else:
+                verify_media(path, expected, require_audio=require_audio)
         except ValueError:
             preserve_incomplete(path)
 
@@ -87,16 +91,12 @@ def download(url: str, cookie_file: str | None = None, *, auto_cookies=True, bro
              session_cookies=None, user_agent=None, mode="video", video_format="mp4", image_format="png",
              audio_bitrate=192) -> dict:
     validate_options(mode, video_format, image_format, audio_bitrate)
-    url, platform = resolve_link(url)
+    url, platform, source_key = download_link(url)
     emit("platform", platform=platform.key, label=platform.label)
     require_tools()
     if cookie_file and not Path(cookie_file).is_file():
         raise ValueError("选择的 Cookie 文件不存在。")
     OUTPUT.mkdir(parents=True, exist_ok=True)
-    try:
-        source_key = download_link(url)[2]
-    except ValueError:
-        source_key = url
     temporary = OUTPUT / ".downloads" / hashlib.sha256((source_key + "|" + mode).encode()).hexdigest()[:20]
     temporary.mkdir(parents=True, exist_ok=True)
     final_paths = []
@@ -134,6 +134,10 @@ def download(url: str, cookie_file: str | None = None, *, auto_cookies=True, bro
         "logger": Logger(), "progress_hooks": [progress], "postprocessor_hooks": [postprocess],
         "writeinfojson": False, "writethumbnail": False,
     }
+    if platform.key == "youtube":
+        options["js_runtimes"] = js_runtime_options()
+        if not options["js_runtimes"]:
+            raise ValueError("缺少 YouTube 解析运行环境，请安装包含完整组件的新版软件。")
     if tool("ffmpeg") != "ffmpeg":
         options["ffmpeg_location"] = tool("ffmpeg")
     proxy = windows_system_proxy()
@@ -201,6 +205,11 @@ def download(url: str, cookie_file: str | None = None, *, auto_cookies=True, bro
                     raise ValueError("连接 X 失败，请确认本机网络能够打开 x.com，然后重新下载。") from exc
                 if any(word in message for word in ("login", "authenticate", "sign in", "unauthorized")):
                     raise ValueError("X 要求有效登录，请点击「网页登录」完成登录后重试。") from exc
+            if platform.key in {"instagram", "youtube"}:
+                if any(word in message for word in ("login", "log in", "sign in", "authenticate", "private", "cookies")):
+                    raise ValueError(f"{platform.label} 要求登录或验证，请通过「网页登录」完成后重试。") from exc
+                if any(word in message for word in ("timed out", "timeout", "connect", "network")):
+                    raise ValueError(f"连接 {platform.label} 失败，请确认系统代理和网络能够打开该链接后重试。") from exc
             raise
         if info and info.get("_douyin_gallery") and platform.key == "douyin":
             return download_gallery(info, ydl, OUTPUT, emit, probe_media, mode=mode,
@@ -214,11 +223,28 @@ def download(url: str, cookie_file: str | None = None, *, auto_cookies=True, bro
         if not info or info.get("_type") in {"playlist", "multi_video"}:
             raise ValueError("请提供单个视频链接。")
         expected = float(info.get("duration") or 0)
-        if not expected:
+        # Instagram's public page can provide complete media but omit duration.
+        # Keep transport completion and full decoding mandatory; derive the
+        # export reference from the downloaded source instead of rejecting it.
+        unknown_duration = platform.key == "instagram" and expected == 0
+        if not math.isfinite(expected) or expected < 0 or (not expected and not unknown_duration):
             raise ValueError("无法获取完整时长，请检查视频链接或重新扫描浏览器登录状态。")
         if info.get("is_live"):
             raise ValueError("当前仅支持已经发布的完整视频，暂不支持直播。")
-        quarantine_incomplete(info, ydl, expected, kind=mode)
+        silent_instagram = (platform.key == "instagram" and info.get("acodec") == "none"
+                            and not any(f.get("acodec") not in (None, "none") for f in info.get("formats", [])))
+        if silent_instagram:
+            if mode == "audio":
+                raise ValueError("Instagram 当前提供的视频流没有音轨，无法提取 MP3。可尝试登录后重试。")
+            emit("log", message="Instagram 当前提供的视频流没有音轨，将保存无声视频；可尝试登录后重新下载。")
+        if not unknown_duration:
+            quarantine_incomplete(info, ydl, expected, kind=mode, require_audio=not silent_instagram)
+        else:
+            # Unknown-length sources must be freshly transferred, never reused
+            # from an interrupted attempt merely because a filename exists.
+            for candidate in media_candidates(ydl.prepare_filename(info)):
+                if candidate.is_file():
+                    preserve_incomplete(candidate)
         emit("metadata", title=info.get("title"), duration=expected,
              height=info.get("height"), formats=[{
                  "id": f.get("format_id"), "height": f.get("height"), "abr": f.get("abr"),
@@ -242,6 +268,12 @@ def download(url: str, cookie_file: str | None = None, *, auto_cookies=True, bro
                          if candidate.is_file()), None)
         if path is None:
             raise ValueError("未找到下载后的媒体文件，请查看详细日志。")
+    duration_source = "platform"
+    if unknown_duration:
+        expected = float(probe_media(path).get("format", {}).get("duration") or 0)
+        if not math.isfinite(expected) or expected <= 0:
+            raise ValueError("已下载的媒体没有有效时长，请重试。")
+        duration_source = "downloaded_media"
     emit("stage", message="正在提取并校验 MP3…" if mode == "audio" else "正在导出并校验视频…")
     try:
         if mode == "audio":
@@ -251,13 +283,14 @@ def download(url: str, cookie_file: str | None = None, *, auto_cookies=True, bro
             result.pop("source_path", None)
         else:
             result = export_video(path, OUTPUT, video_format=video_format, expected=expected,
+                                  require_audio=not silent_instagram,
                                   progress=lambda message: emit("stage", message=message))
     except ValueError:
         # Packet corruption can pass ffprobe but fail decoding; do not reuse
         # these worker-owned bytes forever on every retry.
         preserve_incomplete(path)
         raise
-    result.update(title=info.get("title"), expected_duration=expected,
+    result.update(title=info.get("title"), expected_duration=expected, duration_source=duration_source,
                   platform=platform.key, source_key=source_key, selected_formats=[f.get("format_id") for f in info.get("requested_formats", [])]
                   or [info.get("format_id")])
     try:
@@ -275,7 +308,7 @@ def download(url: str, cookie_file: str | None = None, *, auto_cookies=True, bro
 if __name__ == "__main__":
     sys.stdout.reconfigure(encoding="utf-8")
     sys.stdin.reconfigure(encoding="utf-8")
-    parser = argparse.ArgumentParser(description="自动识别 Bilibili、抖音和 X，下载最高可用画质与音质")
+    parser = argparse.ArgumentParser(description="自动识别 Bilibili、抖音、X、Instagram 和 YouTube，下载并导出作品")
     parser.add_argument("url", nargs="?")
     parser.add_argument("--cookies", default=None)
     parser.add_argument("--no-browser-cookies", action="store_true")

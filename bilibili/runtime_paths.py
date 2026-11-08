@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import shutil
 import sys
 import threading
 import uuid
@@ -101,3 +102,22 @@ def configure_tools():
     folder = Path(getattr(sys, "_MEIPASS", SOURCE)) / "tools"
     if folder.is_dir():
         os.environ["PATH"] = str(folder) + os.pathsep + os.environ.get("PATH", "")
+
+
+def js_runtime_options():
+    """Explicitly enable yt-dlp's JS solver, including on a clean Windows PC.
+
+    Prefer our bundled runtime over a possibly older system installation. Android
+    uses native library executables and must not accidentally select a Windows
+    binary from a copied engine directory.
+    """
+    if os.environ.get("VIDEO_DOWNLOADER_NATIVE_LIBS"):
+        return {}
+    bundled = Path(getattr(sys, "_MEIPASS", SOURCE)) / "tools" / "node.exe"
+    if bundled.is_file():
+        return {"node": {"path": str(bundled)}}
+    for name in ("node", "deno"):
+        executable = shutil.which(name)
+        if executable:
+            return {name: {"path": executable}}
+    return {}

@@ -157,7 +157,7 @@ def scan_accounts(platform_key=None, source_id=None, on_progress=None):
             if blocked or failed:
                 item["message"] = "部分登录信息受 Windows 加密保护，无法直接读取。" if useful else "登录信息受 Windows 加密保护，无法直接读取；可点「网页登录」或用 Firefox 登录后扫描。"
             else:
-                item["message"] = "已读取可用信息" if useful else "未找到这三个平台的有效登录信息"
+                item["message"] = "已读取可用信息" if useful else "未找到所选平台的有效登录信息"
         except PermissionError:
             item.update(status="locked", message="浏览器占用或权限限制，请完全退出该浏览器后重新扫描。", sites={})
         except sqlite3.OperationalError:

@@ -213,7 +213,7 @@ def capture_review(app, window, directory):
         task.title = "超长作品标题 · " * 40
         task.message = "下载已取消，可点击重试重新开始。"
         window.download_page.render(task)
-        window.download_page.reject_input("没有识别到作品链接，请复制 Bilibili、抖音或 X 的分享链接再试。")
+        window.download_page.reject_input("没有识别到作品链接，请复制支持平台的单条作品分享链接再试。")
         window.resize(METRICS["min_width"], METRICS["min_height"])
         QTest.qWait(150)
         check("minimum_window_honored", window.width() == METRICS["min_width"] and window.height() == METRICS["min_height"])
