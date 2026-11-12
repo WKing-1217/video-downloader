@@ -1,4 +1,4 @@
-# 视频下载器 Android 1.0.7 / Qt Quick
+# 视频下载器 Android 1.0.8 / Qt Quick
 
 安装 `release/VideoDownloader-Android.apk`，支持 Android 10 及以上的 ARM64 手机，并包含 x86_64 运行库。主界面由 Qt 6.11 / Qt Quick 构建，使用同一套 Bilibili、抖音、X、Instagram、YouTube 下载核心。无需在手机另装 Python、Qt 或 FFmpeg。
 
@@ -63,3 +63,11 @@ Android 原生实测已完成 Instagram、YouTube 和抖音实况导出，保存
 ## 1.0.7 更新
 
 “下载更新”使用原生Android浏览器交接，优先默认浏览器，单个浏览器直接打开，多个且无默认时提供选择。浏览器独立处理下载；退出视频下载器后仍可从浏览器下载列表查看进度和安装包。没有可用浏览器时提示重试。下载确认、保存目录和安装授权由浏览器及Android管理。实际Firefox下载及调用方退出验证见 [更新下载验收](UPDATE_BROWSER_REVIEW.md)。
+
+## 1.0.8：软件内下载与安装
+
+根据用户新的要求，更新下载改回软件内部显示真实进度和下载量，由Android系统DownloadManager执行和保留任务，不打开浏览器。下载可取消、失败可重试，切换页面或重新打开应用后恢复状态。
+
+下载完成后校验大小、SHA-256、原生包信息、包名、版本及签名，再使用独立FileProvider和临时只读授权打开系统安装界面。首次需允许安装此来源的应用；授权后继续安装，最终仍由用户确认。后台下载完成时保留安装入口，回到前台处理。Android规定的下载通知保留。
+
+2026-11-13用户检查后授权发布1.0.8；详细证据与小米截图问题的排查边界见 [软件内更新验收](IN_APP_UPDATE_REVIEW.md)。

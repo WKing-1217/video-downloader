@@ -33,6 +33,7 @@ Controller::Controller(QObject *parent) : QObject(parent) {
         startNext();
     });
     timer->start(150);
+    QJniObject::callStaticMethod<void>(bridge, "refreshUpdate", "()V");
     QTimer::singleShot(300, this, &Controller::refreshLibrary);
     if (autoUpdate()) QTimer::singleShot(2500, this, [this] { checkForUpdates(false); });
 #endif
@@ -70,21 +71,40 @@ bool Controller::canExtractLast() const {
                                         || m_video.result["width"].toInt() > 0);
 }
 void Controller::checkForUpdates(bool manual) {
-    if (manual) { m_updateStatus = "正在检查更新…"; emit changed(); }
+    if (updateBusy() || m_updateChecking || m_updateCanInstall) return;
+    m_updateChecking = true;
+    if (manual) m_updateStatus = "正在检查更新…";
+    emit changed();
 #ifdef Q_OS_ANDROID
     QJniObject::callStaticMethod<void>(bridge, "checkForUpdates", "(Z)V", manual);
+#else
+    m_updateChecking = false;
+    m_updateStatus = "请在手机上检查更新。";
+    emit changed();
 #endif
 }
 void Controller::openUpdate() {
-    if (!m_updateAvailable || m_updateUrl.isEmpty()) return;
-    m_updateStatus = "正在打开手机浏览器…";
+    if (!m_updateAvailable || updateBusy() || m_updateChecking) return;
+    m_updateState = "downloading"; m_updateProgress = -1; m_updateCanInstall = false;
+    m_updateStatus = "准备下载更新…"; m_updateDetails.clear();
 #ifdef Q_OS_ANDROID
-    QJniObject::callStaticMethod<void>(bridge, "openUpdateInBrowser", "(Ljava/lang/String;)V",
-                                     QJniObject::fromString(m_updateUrl).object<jstring>());
+    QJniObject::callStaticMethod<void>(bridge, "startUpdate", "()V");
 #else
-    m_updateStatus = "请在手机上使用浏览器下载更新。";
+    m_updateState = "error"; m_updateStatus = "请在手机上下载更新。";
 #endif
     emit changed();
+}
+void Controller::cancelUpdate() {
+    if (!updateBusy()) return;
+#ifdef Q_OS_ANDROID
+    QJniObject::callStaticMethod<void>(bridge, "cancelUpdate", "()V");
+#endif
+}
+void Controller::installUpdate() {
+    if (!m_updateCanInstall || updateBusy() || m_updateChecking) return;
+#ifdef Q_OS_ANDROID
+    QJniObject::callStaticMethod<void>(bridge, "installUpdate", "()V");
+#endif
 }
 static QString supportedPlatform(const QUrl &url) {
     if (!url.isValid() || !url.userInfo().isEmpty() || url.port() != -1) return {};
@@ -293,17 +313,34 @@ void Controller::consume(const QString &line) {
     }
     if(event=="storage") {m_libraryStatus=data["message"].toString();m_storageBusy=data["busy"].toBool();m_saveLocation=data["save_location"].toString(m_saveLocation);emit changed();return;}
     if(event=="library_error") {m_libraryStatus=data["message"].toString();emit changed();return;}
-    if (event == "update_open") {
+    if (event == "update_transfer") {
+        m_updateState = data["state"].toString("idle");
+        m_updateProgress = qBound(-1.0, data["progress"].toDouble(-1), 1.0);
+        m_updateCanInstall = data["canInstall"].toBool();
+        if (data.contains("version")) m_updateVersion = data["version"].toString();
         m_updateStatus = data["message"].toString();
+        m_updateDetails = data["details"].toString();
+        const double downloaded = data["downloaded"].toDouble();
+        const double total = data["total"].toDouble();
+        if (m_updateDetails.isEmpty() && total > 0 && m_updateState != "idle") {
+            m_updateDetails = QString("%1 / %2 MB").arg(downloaded / 1048576, 0, 'f', 1).arg(total / 1048576, 0, 'f', 1);
+            if (m_updateProgress >= 0) m_updateDetails += QString(" · %1%").arg(qRound(m_updateProgress * 100));
+        }
+        if (m_updateState != "idle") m_updateAvailable = true;
         emit changed(); return;
     }
     if (event == "update") {
+        m_updateChecking = false;
         if (data.contains("error")) {
-            if (data["manual"].toBool()) m_updateStatus = data["error"].toString();
+            if (data["manual"].toBool() && !updateBusy() && !m_updateCanInstall) m_updateStatus = data["error"].toString();
         } else {
-            m_updateAvailable = data["available"].toBool(); m_updateUrl = data["url"].toString();
-            m_updateStatus = m_updateAvailable ? "发现新版本 " + data["version"].toString()
-                                              : data["manual"].toBool() ? "已经是最新版本" : "";
+            m_updateAvailable = data["available"].toBool();
+            m_updateVersion = data["version"].toString();
+            if (!updateBusy() && !m_updateCanInstall) {
+                m_updateState = "idle"; m_updateProgress = 0; m_updateDetails.clear();
+                m_updateStatus = m_updateAvailable ? "发现新版本 " + m_updateVersion
+                                                  : data["manual"].toBool() ? "已经是最新版本" : "";
+            }
         }
         emit changed(); return;
     }

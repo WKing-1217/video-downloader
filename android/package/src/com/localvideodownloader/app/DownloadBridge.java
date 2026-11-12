@@ -114,7 +114,10 @@ public final class DownloadBridge {
     }
     public static void cancel() { DownloadService.cancelDownload(); }
     public static void checkForUpdates(boolean manual) { AppUpdater.check(manual); }
-    public static void openUpdateInBrowser(String url) { AppUpdater.openUpdateInBrowser(url); }
+    public static void startUpdate() { UpdateDownload.start(); }
+    public static void cancelUpdate() { UpdateDownload.cancel(); }
+    public static void installUpdate() { UpdateDownload.install(); }
+    public static void refreshUpdate() { UpdateDownload.refresh(); }
     /** Match exact supported hosts; never leak a site session to a lookalike. */
     static String platformKey(String text) {
         if (text == null) return "";

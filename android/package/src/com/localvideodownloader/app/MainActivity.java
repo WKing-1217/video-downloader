@@ -54,6 +54,11 @@ public class MainActivity extends QtActivity {
     @Override protected void onResume() {
         super.onResume();
         scheduleSystemBarsRestore();
+        UpdateDownload.onResume();
+    }
+    @Override protected void onPause() {
+        UpdateDownload.onPause();
+        super.onPause();
     }
     @Override public void onWindowFocusChanged(boolean hasFocus) {
         super.onWindowFocusChanged(hasFocus);

@@ -34,6 +34,9 @@ ApplicationWindow {
     readonly property int pageTitleSize: width < 360 ? 22 : 24
     readonly property int gap: 16
     readonly property int controlHeight: 48
+    readonly property int progressHeight: 8
+    readonly property int progressCycleDuration: 1100
+    readonly property int metadataTextSize: 14
     font.pixelSize: 16
     palette.text: ink
     palette.windowText: ink
@@ -127,6 +130,31 @@ ApplicationWindow {
             color: !action.enabled ? window.disabledSurface : action.primary ? (action.down ? window.accentPressed : window.accent) : action.quiet ? "transparent" : window.surface
             outlineWidth: action.quiet || action.primary ? 0 : 1
             outlineColor: action.activeFocus ? window.accent : window.borderColor
+        }
+    }
+    component ProgressLine: ProgressBar {
+        id: line
+        from: 0; to: 1; implicitHeight: window.progressHeight
+        background: Rectangle { radius: height / 2; color: window.progressTrack }
+        contentItem: Item {
+            clip: true
+            Rectangle {
+                visible: !line.indeterminate
+                width: parent.width * line.visualPosition
+                height: parent.height; radius: height / 2; color: window.accent
+            }
+            Rectangle {
+                id: movingFill
+                visible: line.indeterminate
+                width: parent.width * .35; height: parent.height
+                radius: height / 2; color: window.accent
+                NumberAnimation on x {
+                    running: line.visible && line.indeterminate
+                    loops: Animation.Infinite
+                    from: -movingFill.width; to: movingFill.parent.width
+                    duration: window.progressCycleDuration
+                }
+            }
         }
     }
     component FormatSelect: ComboBox {
@@ -355,20 +383,11 @@ ApplicationWindow {
                     anchors.margins: 16; spacing: 12
                     Label { text: downloadApp.title; font.pixelSize: 18; font.weight: Font.DemiBold; wrapMode: Text.Wrap; Layout.fillWidth: true }
                     Label { text: downloadApp.status; color: window.muted; wrapMode: Text.Wrap; Layout.fillWidth: true }
-                    ProgressBar {
-                        id: transferProgress
+                    ProgressLine {
                         visible: downloadApp.taskBusy || downloadApp.complete
                         Layout.fillWidth: true
-                        from: 0; to: 1; value: Math.max(0, downloadApp.progress)
+                        value: Math.max(0, downloadApp.progress)
                         indeterminate: downloadApp.taskBusy && downloadApp.progress < 0
-                        implicitHeight: 8
-                        background: Rectangle { radius: 4; color: window.progressTrack }
-                        contentItem: Item {
-                            Rectangle {
-                                width: transferProgress.indeterminate ? parent.width * 0.35 : parent.width * transferProgress.visualPosition
-                                height: parent.height; radius: 4; color: window.accent
-                            }
-                        }
                     }
                     Label { visible: !!downloadApp.details; text: downloadApp.details; color: window.muted; font.pixelSize: 14; wrapMode: Text.Wrap; Layout.fillWidth: true }
                     RowLayout {
@@ -564,6 +583,7 @@ ApplicationWindow {
                 }
             }
             ColumnLayout {
+                objectName: "updateSection"
                 Layout.fillWidth: true; spacing: 12
                 Label { text: "软件更新"; font.pixelSize: 18; font.weight: Font.DemiBold }
                 CheckBox {
@@ -571,13 +591,54 @@ ApplicationWindow {
                     onToggled: downloadApp.autoUpdate = checked
                     palette.windowText: window.ink
                 }
-                ActionButton {
-                    Layout.fillWidth: true
-                    text: downloadApp.updateAvailable ? "下载更新" : "检查更新"
-                    onClicked: downloadApp.updateAvailable ? downloadApp.openUpdate() : downloadApp.checkForUpdates(true)
+                Label {
+                    objectName: "updateStatusLabel"
+                    visible: !!downloadApp.updateStatus
+                    text: downloadApp.updateStatus; color: window.muted
+                    wrapMode: Text.Wrap; Layout.fillWidth: true
                 }
-                Label { visible: !!downloadApp.updateStatus; text: downloadApp.updateStatus; color: window.muted; wrapMode: Text.Wrap; Layout.fillWidth: true }
-                Label { text: "当前版本 " + downloadApp.version; color: window.muted; font.pixelSize: 14 }
+                ProgressLine {
+                    objectName: "updateProgressBar"
+                    Layout.fillWidth: true
+                    visible: downloadApp.updateBusy
+                    value: Math.max(0, downloadApp.updateProgress)
+                    indeterminate: downloadApp.updateProgress < 0 || downloadApp.updateState === "verifying"
+                    Accessible.name: "更新下载进度"
+                }
+                Label {
+                    objectName: "updateDetailsLabel"
+                    visible: !!downloadApp.updateDetails
+                    text: downloadApp.updateDetails; color: window.muted
+                    font.pixelSize: window.metadataTextSize; wrapMode: Text.Wrap; Layout.fillWidth: true
+                }
+                RowLayout {
+                    Layout.fillWidth: true; spacing: 8
+                    ActionButton {
+                        objectName: "updatePrimaryButton"
+                        Layout.fillWidth: true
+                        visible: !downloadApp.updateBusy
+                        enabled: !downloadApp.updateChecking
+                        primary: downloadApp.updateAvailable || downloadApp.updateCanInstall
+                        text: downloadApp.updateChecking ? "正在检查…"
+                              : downloadApp.updateCanInstall ? (downloadApp.updateState === "permission" ? "允许安装" : "立即安装")
+                              : downloadApp.updateAvailable ? (downloadApp.updateState === "error" || downloadApp.updateState === "cancelled" ? "重新下载" : "下载更新")
+                              : "检查更新"
+                        onClicked: downloadApp.updateCanInstall ? downloadApp.installUpdate()
+                                   : downloadApp.updateAvailable ? downloadApp.openUpdate() : downloadApp.checkForUpdates(true)
+                    }
+                    ActionButton {
+                        objectName: "updateCancelButton"
+                        Layout.fillWidth: true; visible: downloadApp.updateBusy
+                        text: "取消下载"; onClicked: downloadApp.cancelUpdate()
+                    }
+                    ActionButton {
+                        objectName: "updateCheckButton"
+                        visible: downloadApp.updateAvailable && !downloadApp.updateBusy && !downloadApp.updateCanInstall
+                        enabled: !downloadApp.updateChecking
+                        text: "检查更新"; quiet: true; onClicked: downloadApp.checkForUpdates(true)
+                    }
+                }
+                Label { text: "当前版本 " + downloadApp.version; color: window.muted; font.pixelSize: window.metadataTextSize }
             }
             ColumnLayout {
                 Layout.fillWidth: true; spacing: 8

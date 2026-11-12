@@ -28,6 +28,9 @@ class Preview(QObject):
         self._image = "png"
         self._bitrate = 192
         self._auto_update = True
+        self._update = {}
+        self._update_actions = []
+        self._version = json.loads((Path(__file__).resolve().parents[1] / "bilibili/version.json").read_text(encoding="utf-8"))["android_version"]
 
     def set_page(self, value):
         self._page = value
@@ -69,9 +72,16 @@ class Preview(QObject):
     videoFormat = Property(str, lambda s: s._video, set_video, notify=changed)
     imageFormat = Property(str, lambda s: s._image, set_image, notify=changed)
     audioBitrate = Property(int, lambda s: s._bitrate, set_bitrate, notify=changed)
-    version = Property(str, lambda s: "1.0.6 · 预览", notify=changed)
-    updateStatus = Property(str, lambda s: "", notify=changed)
-    updateAvailable = Property(bool, lambda s: False, notify=changed)
+    version = Property(str, lambda s: s._version + " · 预览", notify=changed)
+    updateStatus = Property(str, lambda s: s._update.get("message", ""), notify=changed)
+    updateAvailable = Property(bool, lambda s: s._update.get("available", False), notify=changed)
+    updateVersion = Property(str, lambda s: s._update.get("version", ""), notify=changed)
+    updateState = Property(str, lambda s: s._update.get("state", "idle"), notify=changed)
+    updateDetails = Property(str, lambda s: s._update.get("details", ""), notify=changed)
+    updateProgress = Property(float, lambda s: s._update.get("progress", 0.0), notify=changed)
+    updateBusy = Property(bool, lambda s: s._update.get("state") in {"downloading", "paused", "verifying"}, notify=changed)
+    updateChecking = Property(bool, lambda s: s._update.get("checking", False), notify=changed)
+    updateCanInstall = Property(bool, lambda s: s._update.get("canInstall", False), notify=changed)
     autoUpdate = Property(bool, lambda s: s._auto_update, set_auto_update, notify=changed)
 
     libraryItems = Property("QVariantList", lambda s: [
@@ -118,9 +128,13 @@ class Preview(QObject):
     @Slot()
     def shareResult(self): pass
     @Slot(bool)
-    def checkForUpdates(self, manual=True): pass
+    def checkForUpdates(self, manual=True): self._update_actions.append("checkForUpdates")
     @Slot()
-    def openUpdate(self): pass
+    def openUpdate(self): self._update_actions.append("openUpdate")
+    @Slot()
+    def cancelUpdate(self): self._update_actions.append("cancelUpdate")
+    @Slot()
+    def installUpdate(self): self._update_actions.append("installUpdate")
 
 
 def main():

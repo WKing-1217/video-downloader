@@ -1,6 +1,7 @@
 <?xml version="1.0"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.localvideodownloader.app" android:versionCode="-- %%INSERT_VERSION_CODE%% --" android:versionName="-- %%INSERT_VERSION_NAME%% --">
     <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
@@ -8,18 +9,8 @@
     <uses-feature android:glEsVersion="0x00020000" android:required="true"/>
     <queries>
         <intent>
-            <action android:name="android.intent.action.VIEW"/>
-            <category android:name="android.intent.category.BROWSABLE"/>
-            <data android:scheme="https"/>
-        </intent>
-        <intent>
-            <action android:name="android.intent.action.MAIN"/>
-            <category android:name="android.intent.category.APP_BROWSER"/>
-        </intent>
-        <intent>
-            <action android:name="android.intent.action.VIEW"/>
-            <category android:name="android.intent.category.BROWSABLE"/>
-            <data android:scheme="https" android:mimeType="text/html"/>
+            <action android:name="android.intent.action.INSTALL_PACKAGE"/>
+            <data android:mimeType="application/vnd.android.package-archive"/>
         </intent>
     </queries>
     <application android:name="org.qtproject.qt.android.bindings.QtApplication" android:label="视频下载器" android:icon="@drawable/ic_launcher"
@@ -34,6 +25,9 @@
         <service android:name=".DownloadService" android:exported="false" android:foregroundServiceType="dataSync"/>
         <provider android:name="androidx.core.content.FileProvider" android:authorities="${applicationId}.qtprovider" android:exported="false" android:grantUriPermissions="true">
             <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/qtprovider_paths"/>
+        </provider>
+        <provider android:name=".UpdateFileProvider" android:authorities="${applicationId}.updateprovider" android:exported="false" android:grantUriPermissions="true">
+            <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/update_provider_paths"/>
         </provider>
     </application>
 </manifest>

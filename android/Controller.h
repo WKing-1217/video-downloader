@@ -31,6 +31,13 @@ class Controller : public QObject {
     Q_PROPERTY(QString version READ version CONSTANT)
     Q_PROPERTY(QString updateStatus READ updateStatus NOTIFY changed)
     Q_PROPERTY(bool updateAvailable READ updateAvailable NOTIFY changed)
+    Q_PROPERTY(QString updateVersion READ updateVersion NOTIFY changed)
+    Q_PROPERTY(QString updateState READ updateState NOTIFY changed)
+    Q_PROPERTY(QString updateDetails READ updateDetails NOTIFY changed)
+    Q_PROPERTY(double updateProgress READ updateProgress NOTIFY changed)
+    Q_PROPERTY(bool updateBusy READ updateBusy NOTIFY changed)
+    Q_PROPERTY(bool updateChecking READ updateChecking NOTIFY changed)
+    Q_PROPERTY(bool updateCanInstall READ updateCanInstall NOTIFY changed)
     Q_PROPERTY(bool autoUpdate READ autoUpdate WRITE setAutoUpdate NOTIFY changed)
 public:
     explicit Controller(QObject *parent = nullptr);
@@ -71,6 +78,13 @@ public:
     QString version() const;
     QString updateStatus() const { return m_updateStatus; }
     bool updateAvailable() const { return m_updateAvailable; }
+    QString updateVersion() const { return m_updateVersion; }
+    QString updateState() const { return m_updateState; }
+    QString updateDetails() const { return m_updateDetails; }
+    double updateProgress() const { return m_updateProgress; }
+    bool updateBusy() const { return m_updateState == "downloading" || m_updateState == "paused" || m_updateState == "verifying"; }
+    bool updateChecking() const { return m_updateChecking; }
+    bool updateCanInstall() const { return m_updateCanInstall; }
     bool autoUpdate() const;
     void setAutoUpdate(bool enabled);
     void setLink(const QString &text);
@@ -85,6 +99,8 @@ public:
     Q_INVOKABLE void shareResult();
     Q_INVOKABLE void checkForUpdates(bool manual = true);
     Q_INVOKABLE void openUpdate();
+    Q_INVOKABLE void cancelUpdate();
+    Q_INVOKABLE void installUpdate();
 signals:
     void changed();
 private:
@@ -115,7 +131,9 @@ private:
     int m_page = 0;
     TransferState m_video, m_audio;
     bool m_busy = false, m_pickerPending = false;
-    QString m_activeMode, m_updateStatus, m_updateUrl;
-    bool m_updateAvailable = false;
+    QString m_activeMode, m_updateStatus, m_updateVersion, m_updateDetails;
+    QString m_updateState = "idle";
+    double m_updateProgress = 0;
+    bool m_updateAvailable = false, m_updateChecking = false, m_updateCanInstall = false;
 };
 
