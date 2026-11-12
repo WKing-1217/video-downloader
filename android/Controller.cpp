@@ -7,7 +7,6 @@
 #include <QTimer>
 #include <QUrl>
 #include <QUrlQuery>
-#include <QDesktopServices>
 #include <QSettings>
 #include <QList>
 #include <QStringList>
@@ -77,7 +76,15 @@ void Controller::checkForUpdates(bool manual) {
 #endif
 }
 void Controller::openUpdate() {
-    if (m_updateAvailable && !m_updateUrl.isEmpty()) QDesktopServices::openUrl(QUrl(m_updateUrl));
+    if (!m_updateAvailable || m_updateUrl.isEmpty()) return;
+    m_updateStatus = "正在打开手机浏览器…";
+#ifdef Q_OS_ANDROID
+    QJniObject::callStaticMethod<void>(bridge, "openUpdateInBrowser", "(Ljava/lang/String;)V",
+                                     QJniObject::fromString(m_updateUrl).object<jstring>());
+#else
+    m_updateStatus = "请在手机上使用浏览器下载更新。";
+#endif
+    emit changed();
 }
 static QString supportedPlatform(const QUrl &url) {
     if (!url.isValid() || !url.userInfo().isEmpty() || url.port() != -1) return {};
@@ -286,6 +293,10 @@ void Controller::consume(const QString &line) {
     }
     if(event=="storage") {m_libraryStatus=data["message"].toString();m_storageBusy=data["busy"].toBool();m_saveLocation=data["save_location"].toString(m_saveLocation);emit changed();return;}
     if(event=="library_error") {m_libraryStatus=data["message"].toString();emit changed();return;}
+    if (event == "update_open") {
+        m_updateStatus = data["message"].toString();
+        emit changed(); return;
+    }
     if (event == "update") {
         if (data.contains("error")) {
             if (data["manual"].toBool()) m_updateStatus = data["error"].toString();

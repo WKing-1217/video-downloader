@@ -1,11 +1,11 @@
 # 视频下载器
 
-Android v1.0.6 优化状态栏、键盘、底部导航与播放器返回布局，加入作品库、删除、目录迁移和下载队列，补齐 Instagram 与 YouTube / Shorts，修复抖音实况下载。Windows 提供 v2.1.5，支持同一套核心平台、MP3 提取与导出格式设置。完成校验后保存，新导出只保留媒体文件。
+Android v1.0.7 修复更新下载的外部浏览器交接；1.0.6 已优化状态栏、键盘、底部导航与播放器返回布局，加入作品库、删除、目录迁移和下载队列，补齐 Instagram 与 YouTube / Shorts，修复抖音实况下载。Windows 提供 v2.1.5，支持同一套核心平台、MP3 提取与导出格式设置。完成校验后保存，新导出只保留媒体文件。
 
 ## 下载
 
 - [Windows 安装包](https://github.com/WKing-1217/video-downloader/releases/latest/download/VideoDownloader-Windows-Setup.exe)：Windows 10 / 11 x64，内置运行环境、FFmpeg、播放与网页登录组件。
-- [Android APK](https://github.com/WKing-1217/video-downloader/releases/latest/download/VideoDownloader-Android.apk)：Android 10+，ARM64 / x86_64，v1.0.6。
+- [Android APK](https://github.com/WKing-1217/video-downloader/releases/latest/download/VideoDownloader-Android.apk)：Android 10+，ARM64 / x86_64，v1.0.7。
 - [最新版本与更新说明](https://github.com/WKing-1217/video-downloader/releases/latest)。
 
 安装到原目录即可升级，无需卸载。Windows 与 Android 分别记录实际版本，固定安装包文件名；历史正式 Release 保留供恢复。
@@ -32,6 +32,8 @@ Android 使用下载、提取 MP3、作品、设置四个等宽入口，保留�
 
 ## 更新
 
+Android 1.0.7 的“下载更新”优先交给手机默认浏览器；未设默认时可选择浏览器。退出视频下载器后，下载继续由浏览器管理，安装包和进度在浏览器下载列表中查找。先覆盖安装1.0.7，后续更新才使用新方式。以下为Windows更新流程。
+
 启动后台读取实际 GitHub Releases。无更新不打扰；发现新版可暂不更新，或者进入“软件更新”查看真实说明与下载进度。支持四连接、可靠范围续传、有限重试、取消和 SHA-256 校验；未知大小使用不确定进度。
 
 点击安装并确认后，独立助手备份原程序与设置，退出旧程序、执行安装并验证新版启动；失败时恢复。视频与网页登录资料保留。网络不可用不影响下载页，可重试或打开官方 Releases，不使用未知第三方加速源。
@@ -44,6 +46,7 @@ Android 使用下载、提取 MP3、作品、设置四个等宽入口，保留�
 - [v2.1.3 目录、删除、侧栏与窗口验收](bilibili/STORAGE_REVIEW.md)
 - [v2.1 界面与发布验收](bilibili/UI_REVIEW.md)
 - [v2 修改清单、20 条验收与实际边界](bilibili/V2_DELIVERY.md)
+- [Android 1.0.7 浏览器更新验收](android/UPDATE_BROWSER_REVIEW.md)
 - [Android 构建说明](android/README.md)
 - [Android 1.0.6 界面与功能验收](android/UI_PARITY_REVIEW.md)
 - [第三方组件许可](bilibili/packaging/THIRD_PARTY.txt)

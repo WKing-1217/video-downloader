@@ -1,4 +1,4 @@
-# 视频下载器 Android 1.0.6 / Qt Quick
+# 视频下载器 Android 1.0.7 / Qt Quick
 
 安装 `release/VideoDownloader-Android.apk`，支持 Android 10 及以上的 ARM64 手机，并包含 x86_64 运行库。主界面由 Qt 6.11 / Qt Quick 构建，使用同一套 Bilibili、抖音、X、Instagram、YouTube 下载核心。无需在手机另装 Python、Qt 或 FFmpeg。
 
@@ -59,3 +59,7 @@ Android 运行库的 Python 不提供 `os.link`；`android_bootstrap.py` 仅为 
 保存位置可使用系统文件夹选择器，更改后后台复制已有作品、逐个 SHA-256 校验，再持久化新 URI 和目录，最后删除原文件。迁移日志用于中断恢复；同名文件另存，源文件发生变化时保留原文件。未能清理时保留日志，阻止新下载覆盖恢复记录。Android 系统不允许的文件夹不会强行绕过权限。
 
 Android 原生实测已完成 Instagram、YouTube 和抖音实况导出，保存后的文件逐项校验并完整解码。146项发布源码检查通过，另有真实QML、队列、删除、迁移、冷启动和播放器返回检查。具体范围见 [Android验收记录](UI_PARITY_REVIEW.md)。本次 Windows 安装包继续提供 v2.1.5。
+
+## 1.0.7 更新
+
+“下载更新”使用原生Android浏览器交接，优先默认浏览器，单个浏览器直接打开，多个且无默认时提供选择。浏览器独立处理下载；退出视频下载器后仍可从浏览器下载列表查看进度和安装包。没有可用浏览器时提示重试。下载确认、保存目录和安装授权由浏览器及Android管理。实际Firefox下载及调用方退出验证见 [更新下载验收](UPDATE_BROWSER_REVIEW.md)。
