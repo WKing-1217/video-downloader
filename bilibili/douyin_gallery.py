@@ -5,11 +5,14 @@ An album never passes through the complete-video duration check.
 """
 import hashlib
 import math
+import os
 from pathlib import Path
 import tempfile
+import time
 from urllib.parse import urlparse
 
 from yt_dlp.networking import Request
+from yt_dlp.networking.exceptions import CertificateVerifyError, IncompleteRead, TransportError
 from yt_dlp.utils import sanitize_filename
 from network_settings import windows_system_proxy
 from media_export import (export_image, export_video, extract_audio, full_decode,
@@ -20,7 +23,9 @@ def gallery_proxies():
     # Keep explicit proxy environment variables, but fetch domestic photo/music
     # resources directly when only an automatic Windows proxy is configured.
     # An overseas exit can make otherwise available background music disappear.
-    return {"all": None, "http": None, "https": None} if windows_system_proxy() else None
+    android_auto = (bool(os.environ.get("VIDEO_DOWNLOADER_NATIVE_LIBS"))
+                    and os.environ.get("VIDEO_DOWNLOADER_AUTO_PROXY") == "1")
+    return {"all": None, "http": None, "https": None} if windows_system_proxy() or android_auto else None
 
 
 def _urls(value):
@@ -159,6 +164,32 @@ def _extension(asset, probe):
     return {"mp3": "mp3", "flac": "flac", "opus": "opus", "vorbis": "ogg"}.get(codec, "wav" if "wav" in container else "aac")
 
 
+def _download_asset(ydl, url, temporary, asset, emit):
+    # Android's native TLS stack can lose a CDN connection after its headers.
+    # Restart interrupted transfers instead of appending an unverified prefix.
+    for attempt in range(3):
+        try:
+            with ydl.urlopen(Request(url, proxies=gallery_proxies(), headers={
+                    "Referer": "https://www.douyin.com/", "Accept-Encoding": "identity"})) as response, temporary.open("wb") as out:
+                expected_size = int(response.headers.get("Content-Length") or 0)
+                written = 0
+                while chunk := response.read(256 * 1024):
+                    out.write(chunk)
+                    written += len(chunk)
+                if not written or (expected_size and written != expected_size):
+                    raise IncompleteRead(written, expected_size or None)
+                if asset.get("expected_size") and written != int(asset["expected_size"]):
+                    raise ValueError("实况视频大小与源站不一致。")
+            return
+        except CertificateVerifyError:
+            raise
+        except TransportError:
+            if attempt == 2:
+                raise
+            emit("log", message=f"网络连接中断，正在重新下载 {asset['name']}（{attempt + 1}/2）…")
+            time.sleep(0.25 * (attempt + 1))
+
+
 def download_gallery(info, ydl, output, emit, probe_media, *, mode="video", video_format="mp4",
                      image_format="png", audio_bitrate=192, source_key=None):
     validate_options(mode, video_format, image_format, audio_bitrate)
@@ -187,17 +218,7 @@ def download_gallery(info, ydl, output, emit, probe_media, *, mode="video", vide
             failure = None
             for url in asset["urls"]:
                 try:
-                    with ydl.urlopen(Request(url, proxies=gallery_proxies(), headers={"Referer": "https://www.douyin.com/",
-                                                           "Accept-Encoding": "identity"})) as response, temporary.open("wb") as out:
-                        expected_size = int(response.headers.get("Content-Length") or 0)
-                        written = 0
-                        while chunk := response.read(256 * 1024):
-                            out.write(chunk)
-                            written += len(chunk)
-                        if not written or (expected_size and written != expected_size):
-                            raise ValueError("传输未完成。")
-                        if asset.get("expected_size") and written != int(asset["expected_size"]):
-                            raise ValueError("实况视频大小与源站不一致。")
+                    _download_asset(ydl, url, temporary, asset, emit)
                     probe = probe_media(temporary)
                     verify_asset(temporary, asset, probe)
                     full_decode(temporary)

@@ -1,9 +1,17 @@
 #pragma once
 #include <QObject>
 #include <QJsonObject>
+#include <QVariantList>
+#include <QQueue>
 
 class Controller : public QObject {
     Q_OBJECT
+    Q_PROPERTY(QString libraryStatus READ libraryStatus NOTIFY changed)
+    Q_PROPERTY(QVariantList libraryItems READ libraryItems NOTIFY changed)
+    Q_PROPERTY(QString saveLocation READ saveLocation NOTIFY changed)
+    Q_PROPERTY(bool storageBusy READ storageBusy NOTIFY changed)
+    Q_PROPERTY(int queuedCount READ queuedCount NOTIFY changed)
+    Q_PROPERTY(QString queueStatus READ queueStatus NOTIFY changed)
     Q_PROPERTY(int page READ page WRITE setPage NOTIFY changed)
     Q_PROPERTY(QString link READ link WRITE setLink NOTIFY changed)
     Q_PROPERTY(QString platform READ platform NOTIFY changed)
@@ -26,6 +34,20 @@ class Controller : public QObject {
     Q_PROPERTY(bool autoUpdate READ autoUpdate WRITE setAutoUpdate NOTIFY changed)
 public:
     explicit Controller(QObject *parent = nullptr);
+    QString libraryStatus() const { return m_libraryStatus; }
+    QVariantList libraryItems() const { return m_library; }
+    QString saveLocation() const { return m_saveLocation; }
+    bool storageBusy() const { return m_storageBusy; }
+    Q_INVOKABLE void refreshLibrary();
+    Q_INVOKABLE void openLibraryItem(const QString &id);
+    Q_INVOKABLE void shareLibraryItem(const QString &id);
+    Q_INVOKABLE void removeLibraryItem(const QString &id);
+    Q_INVOKABLE void extractLibraryAudio(const QString &id);
+    Q_INVOKABLE void chooseSaveLocation();
+    Q_INVOKABLE void resetSaveLocation();
+    int queuedCount() const;
+    QString queueStatus() const { return m_page == 1 ? m_audioQueueStatus : m_videoQueueStatus; }
+    Q_INVOKABLE void clearQueue();
     int page() const { return m_page; }
     void setPage(int value);
     QString link() const { return current().link; }
@@ -34,7 +56,7 @@ public:
     QString status() const { return current().status; }
     QString details() const { return current().details; }
     QString logs() const { return m_page == 2 ? m_video.logs + m_audio.logs : current().logs; }
-    bool busy() const { return m_busy || m_pickerPending; }
+    bool busy() const { return m_busy || m_pickerPending || m_storageBusy || !m_queue.isEmpty(); }
     bool taskBusy() const { return m_busy && currentMode() == m_activeMode; }
     bool hasTask() const { return current().hasTask; }
     bool complete() const { return !current().result.isEmpty(); }
@@ -66,6 +88,16 @@ public:
 signals:
     void changed();
 private:
+    struct PendingDownload {
+        QString link, platform, mode, videoFormat, imageFormat, key;
+        int audioBitrate = 192;
+    };
+    void startPending(const PendingDownload &task);
+    void startNext();
+    bool nativeWorkerRunning() const;
+    QString &currentQueueStatus() { return m_page == 1 ? m_audioQueueStatus : m_videoQueueStatus; }
+    QQueue<PendingDownload> m_queue;
+    QString m_activeKey, m_videoQueueStatus, m_audioQueueStatus;
     struct TransferState {
         QString link, platform, title, status, details, logs;
         bool hasTask = false;
@@ -76,6 +108,10 @@ private:
     const TransferState &current() const { return m_page == 1 ? m_audio : m_video; }
     QString currentMode() const { return m_page == 1 ? "audio" : "video"; }
     TransferState &forMode(const QString &mode) { return mode == "audio" ? m_audio : m_video; }
+    QVariantList m_library;
+    QString m_libraryStatus;
+    QString m_saveLocation = "下载 / 视频下载器";
+    bool m_storageBusy = false;
     int m_page = 0;
     TransferState m_video, m_audio;
     bool m_busy = false, m_pickerPending = false;

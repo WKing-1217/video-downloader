@@ -80,6 +80,13 @@ class JsRuntimeTests(unittest.TestCase):
         with patch.object(runtime_paths.sys, "_MEIPASS", str(self.root), create=True), patch.object(runtime_paths.shutil, "which", side_effect=lambda name: "deno-runtime" if name == "deno" else None):
             self.assertEqual(runtime_paths.js_runtime_options(), {"deno": {"path": "deno-runtime"}})
 
+    def test_android_uses_its_packaged_quickjs_executable(self):
+        library = self.root / "libqjs.so"
+        library.write_bytes(b"fixture native executable")
+        with patch.dict(os.environ, {"VIDEO_DOWNLOADER_NATIVE_LIBS": str(self.root)}), patch.object(runtime_paths.shutil, "which") as find:
+            self.assertEqual(runtime_paths.js_runtime_options(), {"quickjs": {"path": str(library)}})
+            find.assert_not_called()
+
     def test_missing_runtime_and_android_do_not_select_windows_binary(self):
         with patch.object(runtime_paths.sys, "_MEIPASS", str(self.root), create=True), patch.object(runtime_paths.shutil, "which", return_value=None):
             self.assertEqual(runtime_paths.js_runtime_options(), {})

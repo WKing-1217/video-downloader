@@ -1,16 +1,18 @@
 # 视频下载器
 
-Windows v2.1.5 新增 Instagram 单视频和 YouTube / Shorts 链接下载，沿用简约蓝灰界面、MP3 提取与导出格式设置。Bilibili、抖音、X 和抖音图文功能继续保留；完成校验后保存，新导出只保留媒体文件。Android APK 保持 v1.0.5，本次新增平台仅在 Windows 提供。
+Android v1.0.6 优化状态栏、键盘、底部导航与播放器返回布局，加入作品库、删除、目录迁移和下载队列，补齐 Instagram 与 YouTube / Shorts，修复抖音实况下载。Windows 提供 v2.1.5，支持同一套核心平台、MP3 提取与导出格式设置。完成校验后保存，新导出只保留媒体文件。
 
 ## 下载
 
 - [Windows 安装包](https://github.com/WKing-1217/video-downloader/releases/latest/download/VideoDownloader-Windows-Setup.exe)：Windows 10 / 11 x64，内置运行环境、FFmpeg、播放与网页登录组件。
-- [Android APK](https://github.com/WKing-1217/video-downloader/releases/latest/download/VideoDownloader-Android.apk)：Android 10+，ARM64 / x86_64，v1.0.5。
+- [Android APK](https://github.com/WKing-1217/video-downloader/releases/latest/download/VideoDownloader-Android.apk)：Android 10+，ARM64 / x86_64，v1.0.6。
 - [最新版本与更新说明](https://github.com/WKing-1217/video-downloader/releases/latest)。
 
 安装到原目录即可升级，无需卸载。Windows 与 Android 分别记录实际版本，固定安装包文件名；历史正式 Release 保留供恢复。
 
 ![Windows 独立 MP3 提取页](docs/desktop.png)
+
+![Android 1.0.6 下载页](docs/android.png)
 
 ## 使用
 
@@ -22,7 +24,7 @@ Windows v2.1.5 新增 Instagram 单视频和 YouTube / Shorts 链接下载，沿
 
 设置中可选导出格式：视频默认 MP4，可选 MKV、MOV、WebM；图片默认 PNG，可选 JPEG、WebP；MP3 可选 128、192、256、320 kbps，默认 192。新导出不生成 JSON 附件，作品信息保存在程序内部；旧 JSON 仍兼容读取。下拉框不再响应滚轮切换，滚轮继续滚动页面，点击和键盘选择正常。
 
-Android 使用下载、提取 MP3、设置三个独立页面，保留各页输入和状态，支持从系统选择本地视频提取 MP3。手机端通过系统文件选择与媒体保存接口访问文件，完成后可打开或分享。
+Android 使用下载、提取 MP3、作品、设置四个等宽入口，保留各页输入和状态；可连续添加链接排队，也支持选择本地视频提取 MP3。作品库可搜索、查看、分享及删除，图文可逐项打开或删除，实况以独立视频保存。在设置中选择授权文件夹后，已有作品会校验迁移，同名文件另存；仅清理登记的旧文件，保留其他文件。手机通过系统媒体播放器打开成品。
 
 “我的视频”自动导入原保存目录，支持搜索、排序、内置播放及视频/图文删除，图文可单张删除，删除前确认。播放器和图片查看器使用独立窗口，可最小化、最大化并正常切回视频库。首次安装可选择保存位置；设置或视频库底部可更改目录，原作品会自动迁移，校验后清理旧文件和空目录，其他个人文件保留。
 
@@ -43,6 +45,7 @@ Android 使用下载、提取 MP3、设置三个独立页面，保留各页输�
 - [v2.1 界面与发布验收](bilibili/UI_REVIEW.md)
 - [v2 修改清单、20 条验收与实际边界](bilibili/V2_DELIVERY.md)
 - [Android 构建说明](android/README.md)
+- [Android 1.0.6 界面与功能验收](android/UI_PARITY_REVIEW.md)
 - [第三方组件许可](bilibili/packaging/THIRD_PARTY.txt)
 
 桌面推荐标准 CPython 3.12 x64，安装 bilibili/requirements.txt、PyInstaller，准备 FFmpeg 与 Inno Setup 6 后执行 bilibili/packaging/build_windows.ps1。版本与发布仓库在 bilibili/version.json。
@@ -58,4 +61,4 @@ Windows 源码验证包含 120 项单元检查、32 项下载内核冒烟、27 �
 
 Windows 安装包内置 Node.js 与匹配的 yt-dlp-ejs 脚本，无需另装 JavaScript 环境；源码运行使用 `yt-dlp[default]` 与 Node.js 22+（或 Deno），本地 Node 可放在 `bilibili/tools/node.exe`，也可加入 PATH。Windows 下载尊重系统代理；网页登录与浏览器读取继续按站点隔离。
 
-Instagram 公开响应有时省略时长，下载传输完成后读取实际媒体时长并完整解码，验证后再导出。平台明确返回无音轨的视频可保存为无声视频，完成状态会说明；不伪造音轨，无音轨不能提取 MP3。提供的两条链接实际导出结果见 [新增平台验收](bilibili/SOCIAL_REVIEW.md)。Android 现有 APK 未加入这两个平台，不沿用 Windows 验收结论。
+Instagram 公开响应有时省略时长，下载传输完成后读取实际媒体时长并完整解码，验证后再导出。平台明确返回无音轨的视频可保存为无声视频，完成状态会说明；不伪造音轨，无音轨不能提取 MP3。Windows实际导出结果见 [新增平台验收](bilibili/SOCIAL_REVIEW.md)。Android 1.0.6已另行完成这两个平台的真实下载、公共媒体保存和解码检查，使用内置QuickJS与EJS，无需另装JavaScript环境。

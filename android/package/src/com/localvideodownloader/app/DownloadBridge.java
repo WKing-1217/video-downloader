@@ -14,6 +14,10 @@ import android.widget.Button;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Locale;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -110,11 +114,47 @@ public final class DownloadBridge {
     }
     public static void cancel() { DownloadService.cancelDownload(); }
     public static void checkForUpdates(boolean manual) { AppUpdater.check(manual); }
+    /** Match exact supported hosts; never leak a site session to a lookalike. */
+    static String platformKey(String text) {
+        if (text == null) return "";
+        Matcher links = Pattern.compile("https?://[^\\s<>\"“”。；！？]+", Pattern.CASE_INSENSITIVE).matcher(text);
+        while (links.find()) {
+            String candidate = links.group().replaceAll("[,）)\\]};、。]+$", "");
+            Uri uri = Uri.parse(candidate);
+            String host = uri.getHost();
+            if (host == null || uri.getPort() != -1 || uri.getUserInfo() != null) continue;
+            host = host.toLowerCase(Locale.ROOT);
+            String path = uri.getPath() == null ? "" : uri.getPath().replaceAll("/+$", "");
+            if (host.equals("b23.tv") && path.matches("/[A-Za-z0-9_-]{3,}")) return "bilibili";
+            if (Arrays.asList("bilibili.com","www.bilibili.com","m.bilibili.com").contains(host)
+                    && path.matches("/(?:video/(?:BV[0-9A-Za-z]+|av[0-9]+)|bangumi/play/(?:ep|ss)[0-9]+)")) return "bilibili";
+            if (host.equals("v.douyin.com") && path.matches("/[A-Za-z0-9_-]{3,}")) return "douyin";
+            if (Arrays.asList("douyin.com","www.douyin.com","m.douyin.com","iesdouyin.com","www.iesdouyin.com").contains(host)) {
+                String selected = uri.getQueryParameter("modal_id");
+                if (selected == null) selected = uri.getQueryParameter("vid");
+                if (path.matches("/(?:share/)?(?:video|note|slides)/[0-9]+") || (selected != null && selected.matches("[0-9]+"))) return "douyin";
+            }
+            if (host.equals("t.co") && path.matches("/[A-Za-z0-9_-]{3,}")) return "x";
+            if (Arrays.asList("x.com","www.x.com","mobile.x.com","twitter.com","www.twitter.com","mobile.twitter.com","m.twitter.com").contains(host)
+                    && path.matches("/[^/]+/status/[0-9]+(?:/video/[0-9]+)?")) return "x";
+            if (Arrays.asList("instagram.com","www.instagram.com","m.instagram.com").contains(host)
+                    && path.matches("/(?:reel|reels|p|tv)/[A-Za-z0-9_-]+")) return "instagram";
+            if (host.equals("youtu.be") && path.matches("/[A-Za-z0-9_-]{11}")) return "youtube";
+            if (Arrays.asList("youtube.com","www.youtube.com","m.youtube.com","music.youtube.com").contains(host)) {
+                java.util.List<String> ids = uri.getQueryParameters("v");
+                if ((path.equals("/watch") && ids.size() == 1 && ids.get(0).matches("[A-Za-z0-9_-]{11}"))
+                        || path.matches("/(?:shorts|embed|live)/[A-Za-z0-9_-]{11}")) return "youtube";
+            }
+        }
+        return "";
+    }
     public static void login(String platform) {
         if (activity == null) return;
         activity.runOnUiThread(() -> {
             String site = platform.equals("bilibili") ? "https://www.bilibili.com/" :
-                          platform.equals("douyin") ? "https://www.douyin.com/" : "https://x.com/i/flow/login";
+                          platform.equals("douyin") ? "https://www.douyin.com/" :
+                          platform.equals("instagram") ? "https://www.instagram.com/accounts/login/" :
+                          platform.equals("youtube") ? "https://www.youtube.com/" : "https://x.com/i/flow/login";
             WebView web = new WebView(activity);
             web.getSettings().setJavaScriptEnabled(true);
             web.getSettings().setDomStorageEnabled(true);
@@ -135,7 +175,15 @@ public final class DownloadBridge {
         });
     }
     static JSONObject session(String platform) throws Exception {
-        String domain = platform.equals("bilibili") ? ".bilibili.com" : platform.equals("douyin") ? ".douyin.com" : ".x.com";
+        String domain;
+        switch (platform) {
+            case "bilibili": domain = ".bilibili.com"; break;
+            case "douyin": domain = ".douyin.com"; break;
+            case "instagram": domain = ".instagram.com"; break;
+            case "youtube": domain = ".youtube.com"; break;
+            case "x": domain = ".x.com"; break;
+            default: return new JSONObject().put("cookies", new JSONArray());
+        }
         String cookieHeader = CookieManager.getInstance().getCookie("https://" + domain.substring(1) + "/");
         JSONArray cookies = new JSONArray();
         if (cookieHeader != null) for (String pair : cookieHeader.split(";")) {

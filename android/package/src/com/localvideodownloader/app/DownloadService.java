@@ -6,6 +6,7 @@ import android.net.*;
 import android.os.*;
 import android.provider.MediaStore;
 import android.provider.OpenableColumns;
+import android.provider.DocumentsContract;
 import android.database.Cursor;
 import android.webkit.MimeTypeMap;
 import com.yausername.youtubedl_android.YoutubeDL;
@@ -13,6 +14,7 @@ import com.yausername.ffmpeg.FFmpeg;
 import org.json.*;
 import java.io.*;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.*;
 import java.util.concurrent.*;
 
@@ -32,6 +34,7 @@ public class DownloadService extends Service {
     @Override public int onStartCommand(Intent intent,int flags,int id) {
         String mode = intent == null ? "video" : intent.getStringExtra("mode");
         if (mode == null) mode = "video";
+        if(MediaLibrary.isStorageBusy()) { DownloadBridge.error(mode,"正在迁移保存位置，完成后即可下载。"); return START_NOT_STICKY; }
         if (active) { DownloadBridge.error(mode,"已有任务正在处理，请等待完成或取消后再操作。"); return START_NOT_STICKY; }
         startForeground(1,notification("正在准备下载…"));
         if (!running && intent!=null) {
@@ -139,11 +142,18 @@ public class DownloadService extends Service {
             env.put("VIDEO_DOWNLOADER_OUTPUT",output.getAbsolutePath());
             env.put("VIDEO_DOWNLOADER_NATIVE_LIBS",libs);
             ProxyInfo proxy=getSystemService(ConnectivityManager.class).getDefaultProxy();
-            if(proxy!=null && proxy.getHost()!=null) {
+            boolean explicitProxy=false;
+            for(String proxyKey:new String[]{"HTTP_PROXY","HTTPS_PROXY","ALL_PROXY","http_proxy","https_proxy","all_proxy"})
+                if(env.get(proxyKey)!=null && !env.get(proxyKey).isEmpty())explicitProxy=true;
+            env.remove("VIDEO_DOWNLOADER_AUTO_PROXY");
+            if(!explicitProxy && proxy!=null && proxy.getHost()!=null) {
                 String address="http://"+proxy.getHost()+":"+proxy.getPort();
                 env.put("HTTP_PROXY",address);env.put("HTTPS_PROXY",address);
+                // Only automatically inherited system proxies may be bypassed
+                // by domestic Douyin album endpoints, matching Windows routing.
+                env.put("VIDEO_DOWNLOADER_AUTO_PROXY","1");
             }
-            String platform=text!=null && text.contains("douyin.com") ? "douyin" : text!=null && (text.contains("bilibili.com")||text.contains("b23.tv")) ? "bilibili" : "x";
+            String platform=DownloadBridge.platformKey(text);
             File errors=new File(getCacheDir(),"worker-stderr.txt");builder.redirectError(errors);
             if(canceled) return;
             process=builder.start();
@@ -160,12 +170,20 @@ public class DownloadService extends Service {
                     String type=event.optString("event");
                     if(type.equals("error")) errorReported=true;
                     if(type.equals("complete")) {
-                        getSystemService(NotificationManager.class).notify(1,notification("正在保存到系统下载文件夹…"));
+                        getSystemService(NotificationManager.class).notify(1,notification("正在保存作品…"));
                         publish(event);
+                        try { MediaLibrary.record(this,event); }
+                        catch(Exception historyError) {
+                            // A catalogue error must not turn committed public files
+                            // into a failed download that the user would duplicate.
+                            DownloadBridge.emit(new JSONObject().put("event","log").put("mode",mode)
+                                    .put("message","作品已保存，作品列表暂时未能更新。").toString());
+                        }
                         // Once MediaStore commit succeeds, completion wins a late cancel.
                         DownloadBridge.result=event;DownloadBridge.results.put(mode,event);complete=true;
                         try(Writer out=new OutputStreamWriter(new FileOutputStream(new File(getFilesDir(),"last-result.json")),StandardCharsets.UTF_8)) { out.write(event.toString(2)); }
                         catch(IOException ignored) { /* Public media is already complete; private history is optional. */ }
+                        cleanupPublishedPrivate(event);
                     }
                     DownloadBridge.emit(event.toString());
                 }
@@ -192,18 +210,31 @@ public class DownloadService extends Service {
         ArrayList<Uri> pending=new ArrayList<>();
         try {
             if(assets!=null) {
+                if(assets.length()==0) throw new IOException("作品中没有可保存的媒体");
+                int images=0, livePhotos=0, music=0;
+                for(int n=0;n<assets.length();n++) {
+                    String kind=assets.getJSONObject(n).optString("kind");
+                    if(kind.equals("image")) images++;
+                    else if(kind.equals("live_photo")) livePhotos++;
+                    else if(kind.equals("music")) music++;
+                }
+                if(images!=result.optInt("image_count",images)
+                        || livePhotos!=result.optInt("live_photo_count",livePhotos)
+                        || music!=result.optInt("music_count",music))
+                    throw new IOException("图文作品的图片或实况片段不完整，未发布成品");
                 folder+=new File(result.getString("path")).getName()+"/";
                 for(int n=0;n<assets.length();n++) pending.add(publishFile(assets.getJSONObject(n),folder));
             } else pending.add(publishFile(result,folder));
             if(canceled) throw new InterruptedIOException("任务已取消");
             if(Build.VERSION.SDK_INT>=29) for(Uri uri:pending) {
                 if(canceled) throw new InterruptedIOException("任务已取消");
+                if(DocumentsContract.isDocumentUri(this,uri)) continue;
                 ContentValues ready=new ContentValues();ready.put(MediaStore.Downloads.IS_PENDING,0);
                 if(getContentResolver().update(uri,ready,null,null)!=1) throw new IOException("未能完成媒体保存");
             }
         } catch(Exception e) {
             if(Build.VERSION.SDK_INT>=29) for(Uri uri:pending) {
-                try {getContentResolver().delete(uri,null,null);} catch(Exception ignored) { }
+                try {MediaLibrary.deleteUri(this,uri);} catch(Exception ignored) { }
             }
             throw e;
         }
@@ -211,6 +242,12 @@ public class DownloadService extends Service {
     private Uri publishFile(JSONObject asset,String folder) throws Exception {
         if(canceled) throw new InterruptedIOException("任务已取消");
         File file=new File(asset.getString("path"));
+        File privateMedia=new File(getFilesDir(),"media").getCanonicalFile();
+        String root=privateMedia.getPath()+File.separator;
+        if(!file.getCanonicalPath().startsWith(root) || !file.isFile() || file.length()<=0)
+            throw new IOException("下载媒体无效，未发布文件");
+        long declared=asset.optLong("size",file.length());
+        if(declared!=file.length()) throw new IOException("下载媒体大小校验失败");
         String name=file.getName();
         int dot=name.lastIndexOf('.');
         String ext=dot>=0 ? name.substring(dot+1).toLowerCase(Locale.ROOT) : "";
@@ -220,6 +257,11 @@ public class DownloadService extends Service {
         else if(ext.equals("mov")) mime="video/quicktime";
         else if(ext.equals("webm")) mime="video/webm";
         if(mime==null) mime="application/octet-stream";
+        if(MediaLibrary.outputTree(this)!=null) {
+            // SAF copies are verified by the same shared destination helper.
+            asset.put("mime",mime);asset.put("display_name",name);
+            return MediaLibrary.publishToTree(this,asset,folder);
+        }
         Uri published;
         if(Build.VERSION.SDK_INT>=29) {
             ContentValues row=new ContentValues();row.put(MediaStore.Downloads.DISPLAY_NAME,file.getName());
@@ -228,7 +270,29 @@ public class DownloadService extends Service {
             Uri uri=getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI,row);
             if(uri==null) throw new IOException("系统下载目录不可写");
             try {
-                try(InputStream in=new FileInputStream(file);OutputStream out=getContentResolver().openOutputStream(uri)) { if(out==null) throw new IOException("无法保存文件");transfer(in,out); }
+                try(InputStream in=new FileInputStream(file);OutputStream out=getContentResolver().openOutputStream(uri)) {
+                    if(out==null) throw new IOException("无法保存文件");
+                    transfer(in,out);
+                }
+                // Verify the actual public copy before clearing IS_PENDING.
+                // A LivePhoto is a separate video, not its static cover image.
+                MessageDigest digest=MessageDigest.getInstance("SHA-256");
+                long copied=0;
+                try(InputStream in=getContentResolver().openInputStream(uri)) {
+                    if(in==null) throw new IOException("无法读取保存后的媒体");
+                    byte[] buffer=new byte[256*1024];int count;
+                    while((count=in.read(buffer))!=-1) {
+                        if(canceled) throw new InterruptedIOException("任务已取消");
+                        copied+=count;digest.update(buffer,0,count);
+                    }
+                }
+                if(copied!=declared) throw new IOException("保存的媒体不完整");
+                StringBuilder actual=new StringBuilder();
+                for(byte value:digest.digest()) actual.append(String.format(Locale.ROOT,"%02x",value&0xff));
+                String expected=asset.optString("sha256");
+                if(!expected.isEmpty() && !actual.toString().equalsIgnoreCase(expected))
+                    throw new IOException("保存的媒体校验失败");
+                asset.put("sha256",actual.toString());
                 asset.put("public_uri",uri.toString());
                 published=uri;
             } catch(Exception e) {getContentResolver().delete(uri,null,null);throw e;}
@@ -240,6 +304,28 @@ public class DownloadService extends Service {
         }
         asset.put("display_name",file.getName());asset.put("mime",mime);
         return published;
+    }
+    private void cleanupPublishedPrivate(JSONObject result) {
+        // The public URIs are committed and recorded before removing only the
+        // exact worker-created exports. Never recurse through a media folder.
+        try {
+            File media=new File(getFilesDir(),"media").getCanonicalFile();
+            String prefix=media.getPath()+File.separator;
+            JSONArray assets=result.optJSONArray("assets");
+            ArrayList<JSONObject> files=new ArrayList<>();
+            if(assets!=null) for(int n=0;n<assets.length();n++) files.add(assets.getJSONObject(n));
+            else files.add(result);
+            for(JSONObject asset:files) {
+                String publicValue=asset.optString("public_uri");
+                if(publicValue.isEmpty() || !publicValue.startsWith("content://")) continue;
+                File file=new File(asset.optString("path")).getCanonicalFile();
+                if(file.getPath().startsWith(prefix) && file.isFile()) file.delete();
+            }
+            if(assets!=null) {
+                File album=new File(result.optString("path")).getCanonicalFile();
+                if(album.getPath().startsWith(prefix) && album.isDirectory()) album.delete();
+            }
+        } catch(Exception ignored) { /* Public result remains valid if cleanup is temporarily blocked. */ }
     }
     public static void cancelDownload() {
         canceled=true;

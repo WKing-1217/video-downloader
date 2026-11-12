@@ -111,8 +111,12 @@ def js_runtime_options():
     uses native library executables and must not accidentally select a Windows
     binary from a copied engine directory.
     """
-    if os.environ.get("VIDEO_DOWNLOADER_NATIVE_LIBS"):
-        return {}
+    native = os.environ.get("VIDEO_DOWNLOADER_NATIVE_LIBS")
+    if native:
+        # Android's pinned yt-dlp runtime already ships a QuickJS executable as
+        # a native .so, so it remains executable under Android 10+ restrictions.
+        quickjs = Path(native) / "libqjs.so"
+        return {"quickjs": {"path": str(quickjs)}} if quickjs.is_file() else {}
     bundled = Path(getattr(sys, "_MEIPASS", SOURCE)) / "tools" / "node.exe"
     if bundled.is_file():
         return {"node": {"path": str(bundled)}}
