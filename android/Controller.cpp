@@ -134,11 +134,17 @@ static QString supportedPlatform(const QUrl &url) {
     }
     return {};
 }
+static QString normalizedShareText(QString text) {
+    // Rendered share messages can escape only the scheme's colon.
+    text.replace(QRegularExpression(QStringLiteral(R"(\b(https?)\\(?=://))"),
+                                    QRegularExpression::CaseInsensitiveOption), QStringLiteral("\\1"));
+    return text;
+}
 void Controller::setLink(const QString &text) {
     auto &state = current();
     state.link = text; state.platform.clear();
     QRegularExpression urls("https?://[^\\s<>\"“”。；！？]+", QRegularExpression::CaseInsensitiveOption);
-    auto matches = urls.globalMatch(text);
+    auto matches = urls.globalMatch(normalizedShareText(text));
     while (matches.hasNext()) {
         auto candidate = matches.next().captured();
         while (!candidate.isEmpty() && QString(",）)]};;、。").contains(candidate.back())) candidate.chop(1);
@@ -151,7 +157,7 @@ void Controller::setLink(const QString &text) {
 void Controller::paste() { setLink(QGuiApplication::clipboard()->text()); }
 static QString queueIdentity(const QString &text) {
     QRegularExpression links("https?://[^\\s<>\"“”。；！？]+", QRegularExpression::CaseInsensitiveOption);
-    auto matches = links.globalMatch(text);
+    auto matches = links.globalMatch(normalizedShareText(text));
     while (matches.hasNext()) {
         auto candidate = matches.next().captured();
         while (!candidate.isEmpty() && QString(",）)]};;、。").contains(candidate.back())) candidate.chop(1);

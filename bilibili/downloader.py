@@ -16,7 +16,7 @@ from platform_links import PLATFORMS, normalize_url, resolve_link, download_link
 from network_settings import windows_system_proxy
 from parallel_http import AcceleratedYoutubeDL
 from bilibili_adapter import BiliBiliIE
-from douyin_adapter import DouyinIE
+from douyin_adapter import DouyinIE, prefer_playback_formats
 from douyin_gallery import download_gallery, gallery_proxies
 from runtime_paths import configure_tools, output_dir, tool, js_runtime_options
 from media_export import (AUDIO_BITRATES, IMAGE_FORMATS, VIDEO_FORMATS, extract_audio,
@@ -34,6 +34,20 @@ def emit(event: str, **data):
 
 def verify_media(path: Path, expected: float, probe: dict | None = None, *, require_audio=True) -> dict:
     return verify_video(path, expected, probe, require_audio=require_audio)
+
+
+def instagram_access_error(message: str) -> str | None:
+    """Explain Instagram's access gates without claiming the post is deleted."""
+    message = message.lower().replace("\u2019", "'")
+    if any(reason in message for reason in (
+            "not available to everyone", "isn't available to everyone", "certain audiences",
+            "restricted video", "age-restricted", "age restricted", "inappropriate for some audiences")):
+        return ("Instagram 限制了这条视频的访问。请在「设置 → 账号与登录」选择 Instagram，"
+                "打开网页登录，确认登录后能播放这条视频，再返回重试。登录后仍不可见的视频无法下载。")
+    if any(reason in message for reason in ("login", "log in", "sign in", "authenticate", "private", "cookies")):
+        return ("Instagram 要求登录或验证。请在「设置 → 账号与登录」选择 Instagram，"
+                "打开网页登录，确认这条视频可以播放后再重试。")
+    return None
 
 
 class Logger:
@@ -192,6 +206,7 @@ def download(url: str, cookie_file: str | None = None, *, auto_cookies=True, bro
                     raise ValueError("抖音分享短链接未能展开，请点「网页登录」打开链接、完成验证后重试，或粘贴完整视频网址。") from exc
             info = ydl.extract_info(url, download=False, process=platform.key != "douyin")
             if info and platform.key == "douyin" and not info.get("_douyin_gallery"):
+                prefer_playback_formats(info)
                 info = ydl.process_ie_result(info, download=False)
         except yt_dlp.utils.DownloadError as exc:
             message = str(exc).lower()
@@ -205,6 +220,10 @@ def download(url: str, cookie_file: str | None = None, *, auto_cookies=True, bro
                     raise ValueError("连接 X 失败，请确认本机网络能够打开 x.com，然后重新下载。") from exc
                 if any(word in message for word in ("login", "authenticate", "sign in", "unauthorized")):
                     raise ValueError("X 要求有效登录，请点击「网页登录」完成登录后重试。") from exc
+            if platform.key == "instagram":
+                access_error = instagram_access_error(message)
+                if access_error:
+                    raise ValueError(access_error) from exc
             if platform.key in {"instagram", "youtube"}:
                 if any(word in message for word in ("login", "log in", "sign in", "authenticate", "private", "cookies")):
                     raise ValueError(f"{platform.label} 要求登录或验证，请通过「网页登录」完成后重试。") from exc

@@ -353,8 +353,8 @@ class UpdateController(QObject):
         self.page.check_button.setEnabled(False)
         self.page.download_button.setEnabled(False)
         self.page.retry_button.hide()
-        job.failed.connect(self.failed)
-        job.cancelled_signal.connect(self.cancelled)
+        job.failed.connect(lambda message: self.failed(message) if self.job is job else None)
+        job.cancelled_signal.connect(lambda: self.cancelled() if self.job is job else None)
         job.finished.connect(lambda: self._finished(job))
         job.start()
 
@@ -376,6 +376,7 @@ class UpdateController(QObject):
         self.page.check_button.setEnabled(not self.installing)
         self.page.download_button.setEnabled(True)
         self.page.cancel_button.hide()
+        self.page.retry_button.setEnabled(not self.installing)
         self.stats_timer.stop()
         job.deleteLater()
         if self.pending_download and not self.window.closing:
@@ -425,15 +426,22 @@ class UpdateController(QObject):
         self.estimate = TransferEstimate()
         self.received, self.total = 0, self.info.size
         self.estimate.add(time.monotonic(), 0)
+        self.mode = "downloading"
         self.stats_timer.start()
         self.render_stats()
         job = UpdateJob(info=self.info, client_factory=self.client_factory)
-        job.progress.connect(self.progress)
-        job.stage.connect(self.page.transfer_message.setText)
-        job.downloaded.connect(self.ready)
+        job.progress.connect(lambda values: self.progress(values) if self.job is job else None)
+        job.stage.connect(lambda message: self.stage(message) if self.job is job else None)
+        job.downloaded.connect(lambda installer: self.ready(installer) if self.job is job else None)
         self._start(job, "downloading")
 
+    def stage(self, message):
+        if self.mode == "downloading":
+            self.page.transfer_message.setText(message)
+
     def progress(self, values):
+        if self.mode != "downloading":
+            return
         done, total, now = values
         if done < self.received:
             self.estimate = TransferEstimate()
@@ -445,15 +453,23 @@ class UpdateController(QObject):
         self.render_stats()
 
     def render_stats(self):
-        now = time.monotonic()
-        speed, eta = self.estimate.read(now, self.total)
         total = size_text(self.total) if self.total else "大小待确认"
         percent = f"{self.received / self.total:.0%}" if self.total else "大小未知"
+        if self.mode != "downloading":
+            self.page.stats.setText(f"已接收 {size_text(self.received)} / {total} · {percent}")
+            return
+        now = time.monotonic()
+        speed, eta = self.estimate.read(now, self.total)
         if not self.total:
             eta = "—"
         self.page.stats.setText(f"{size_text(self.received)} / {total} · {speed / 1024 ** 2:.1f} MB/s · {percent} · 剩余 {eta}")
 
     def ready(self, installer):
+        if self.mode == "cancelling":
+            self.cancelled()
+            return
+        if self.mode != "downloading":
+            return
         self.installer = Path(installer)
         self.stats_timer.stop()
         self.page.stats.setText(f"{size_text(self.received)} / {size_text(self.total)} · 100%")
@@ -472,9 +488,22 @@ class UpdateController(QObject):
         if self.mode == "checking":
             self.page.status.setText("检查失败：" + message)
         else:
+            self.page.transfer_title.setText("下载中断 v" + self.info.version)
             self.page.transfer_message.setText(message + " 可重试，或打开官方 Releases 下载。")
         self.mode = "error"
+        if self.retry_download:
+            self.stop_transfer_display()
         self.page.retry_button.show()
+        self.page.retry_button.setEnabled(not self.busy())
+
+    def stop_transfer_display(self):
+        """Freeze observed bytes without claiming they are a saved resume prefix."""
+        self.stats_timer.stop()
+        self.estimate = TransferEstimate()
+        self.page.progress.setRange(0, 100)
+        self.page.progress.setValue(min(100, round(self.received * 100 / self.total)) if self.total else 0)
+        self.page.cancel_button.hide()
+        self.render_stats()
 
     def retry(self):
         if self.retry_download and self.info and self.info.available:
@@ -485,14 +514,20 @@ class UpdateController(QObject):
     def cancel(self):
         if self.job:
             self.job.cancelled.set()
+            self.mode = "cancelling"
+            self.page.transfer_title.setText("正在取消更新…")
+            self.stop_transfer_display()
             self.page.transfer_message.setText("正在取消下载…")
             self.page.cancel_button.setEnabled(False)
 
     def cancelled(self):
         self.retry_download = True
         self.mode = "cancelled"
+        self.page.transfer_title.setText("更新已取消 v" + self.info.version)
+        self.stop_transfer_display()
         self.page.transfer_message.setText("已取消更新，原程序未改动。")
         self.page.retry_button.show()
+        self.page.retry_button.setEnabled(not self.busy())
 
     def install(self):
         if not self.installer or not self.info or self.busy():

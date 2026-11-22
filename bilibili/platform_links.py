@@ -53,6 +53,8 @@ def domain_matches(domain: str, roots: tuple[str, ...]) -> bool:
 
 def resolve_link(text: str) -> tuple[str, Platform]:
     # Douyin's copied text includes a URL surrounded by Chinese punctuation.
+    # Text copied from a rendered share message can escape the scheme colon.
+    text = re.sub(r"\b(https?)\\(?=://)", r"\1", text, flags=re.I)
     links = re.findall(r'https?://[^\s<>"“”。，；！？]+', text.strip(), flags=re.I)
     for link in links:
         link = link.rstrip(",）)]};;、。")

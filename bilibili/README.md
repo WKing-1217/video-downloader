@@ -1,4 +1,4 @@
-# 视频下载器 Windows v2.1.5
+# 视频下载器 Windows v2.1.6
 
 原生 Qt / PySide6 桌面应用，Windows 支持 Bilibili、抖音、X、Instagram 单视频与 YouTube / Shorts。自动选择当前权限下最高可用画质与音质，完成检查后入库；保留抖音图文、实况与配乐。Android APK 保持 v1.0.5，本次新增平台仅在 Windows 提供。
 
@@ -13,7 +13,7 @@ v2.1.4 新增 MP3 提取与导出格式设置。双击“预览MP3与格式.bat�
 
 Windows 10 / 11 x64 双击项目根目录 `release/VideoDownloader-Windows-Setup.exe`，安装到原目录即可升级。安装包内含运行环境、FFmpeg、Qt 播放和网页登录组件，无需安装 Python。
 
-Windows v2.1.5 沿用蓝灰色设计系统、白色输入区及统一线条图标。可双击同目录的“预览新版UI.bat”打开隔离的设计预览，细节见 [UI 验收记录](UI_REVIEW.md)。
+Windows 沿用蓝灰色设计系统、白色输入区及统一线条图标。可双击同目录的“预览新版UI.bat”打开隔离的设计预览，细节见 [UI 验收记录](UI_REVIEW.md)。
 
 本轮支持目录迁移、可调侧栏、单向循环长标题与文件删除，播放器可独立切换和最小化、最大化。检查方式与本轮记录见 [存储和删除验收](STORAGE_REVIEW.md)。
 

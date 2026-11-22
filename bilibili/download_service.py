@@ -109,15 +109,16 @@ class AccountService(QObject):
         self.ensure_web().open(platform_key, url if platform_key in {"douyin", "instagram", "youtube"} else None)
 
     def arguments(self, platform):
-        if not self.auto_login:
-            return ["--no-browser-cookies"], None
-        if self.source_id:
+        if self.auto_login and self.source_id:
             return ["--browser-source", self.source_id], None
-        if self.web:
-            snapshot = self.web.for_platform(platform.key)
-            if snapshot:
-                return ["--session-stdin"], {"cookies": snapshot, "user_agent": self.web.profile.httpUserAgent()}
-        return [], None
+        snapshot = self.web.for_platform(platform.key) if self.web else None
+        if snapshot:
+            # This setting controls automatic reads from other browsers. A
+            # session the user opened inside the app is still an explicit login.
+            args = [] if self.auto_login else ["--no-browser-cookies"]
+            return [*args, "--session-stdin"], {
+                "cookies": snapshot, "user_agent": self.web.profile.httpUserAgent()}
+        return ([] if self.auto_login else ["--no-browser-cookies"]), None
 
     def stop(self):
         if self.process and self.process.state() != QProcess.NotRunning:

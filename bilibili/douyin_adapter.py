@@ -53,6 +53,24 @@ def probe_audio(fmt, duration):
         return None
 
 
+def is_download_variant(fmt):
+    identifier = fmt.get("format_id") or ""
+    note = fmt.get("format_note") or ""
+    return identifier == "download" or identifier.startswith("download_addr") or note.startswith("Download video")
+
+
+def prefer_playback_formats(info):
+    """Use the playback rendition when it carries both video and audio."""
+    formats = info.get("formats") or []
+    playback = [fmt for fmt in formats if fmt.get("url") and not is_download_variant(fmt)
+                and fmt.get("vcodec") != "bytevc2"]
+    if (any(fmt.get("vcodec") != "none" for fmt in playback)
+            and any(fmt.get("acodec") != "none" for fmt in playback)):
+        # A download rendition can append an outro. Its larger dimensions do
+        # not make it a better match for the post's declared playback duration.
+        info["formats"] = playback
+
+
 def add_stream_choices(info, probes):
     """Offer explicit stream selections when HD containers have worse audio.
 
@@ -67,7 +85,7 @@ FFmpegMerger maps only the chosen video track and chosen audio track, with copy.
         return False
     video_views = []
     for fmt in info["formats"]:
-        if fmt.get("format_id", "").startswith("download"):
+        if is_download_variant(fmt):
             continue  # Download variants can contain an extra logo/outro segment.
         view = dict(fmt, format_id=fmt["format_id"] + "-video", acodec="none",
                     format_note="最佳画面候选，合并时仅提取视频轨")
@@ -137,7 +155,7 @@ class DouyinIE(UpstreamDouyinIE):
                     # audio bitrates. Compare one full-length candidate per codec.
                     candidates = {}
                     for fmt in info["formats"]:
-                        if fmt.get("format_id", "").startswith("download"):
+                        if is_download_variant(fmt):
                             continue
                         codec = fmt.get("vcodec")
                         rank = (min(fmt.get("width") or 0, fmt.get("height") or 0), fmt.get("tbr") or 0)

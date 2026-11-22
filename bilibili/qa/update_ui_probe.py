@@ -99,10 +99,35 @@ try:
     up.cancel()
     wait(lambda: up.mode == "cancelled" and not up.busy())
     check("cancel_keeps_application_alive_and_cleans_partial", window.isVisible() and not list(original.parent.glob("*.part")))
+    check("cancel_stops_busy_progress_speed_and_eta", "已取消" in window.update_page.transfer_title.text()
+          and window.update_page.progress.maximum() == 100 and not up.stats_timer.isActive()
+          and "MB/s" not in window.update_page.stats.text() and "剩余" not in window.update_page.stats.text())
     ReleaseHandler.mode = "range"
     up.retry()
     wait(lambda: up.mode == "ready" and not up.busy())
     check("cancelled_download_can_retry", original.read_bytes() == PAYLOAD)
+    original.unlink()
+    ReleaseHandler.fail_after = 8 * 1024 * 1024
+    up.download()
+    wait(lambda: up.mode == "error" and not up.busy(), seconds=45)
+    check("download_failure_freezes_observed_bytes_without_live_stats", 0 < up.received <= up.total
+          and "下载中断" in window.update_page.transfer_title.text() and not up.stats_timer.isActive()
+          and window.update_page.progress.maximum() == 100 and not window.update_page.cancel_button.isVisible()
+          and window.update_page.retry_button.isVisible() and window.update_page.retry_button.isEnabled()
+          and "MB/s" not in window.update_page.stats.text() and "剩余" not in window.update_page.stats.text())
+    terminal = (window.update_page.transfer_message.text(), window.update_page.stats.text(), up.received,
+                window.update_page.progress.value())
+    up.progress((up.received + 65536, up.total, time.monotonic()))
+    up.stage("迟到的下载进度不得覆盖错误")
+    check("late_download_events_cannot_replace_terminal_state", terminal == (
+        window.update_page.transfer_message.text(), window.update_page.stats.text(), up.received,
+        window.update_page.progress.value()))
+    window.grab().save(str(work / "update-download-interrupted.png"))
+    ReleaseHandler.fail_after = None
+    up.retry()
+    wait(lambda: up.mode == "ready" and not up.busy())
+    check("interrupted_download_retry_restores_active_flow", original.read_bytes() == PAYLOAD
+          and "已下载" in window.update_page.transfer_title.text())
     window.set_page(0)
     ReleaseHandler.fail_all = True
     start = time.monotonic()
@@ -123,7 +148,7 @@ finally:
     server.shutdown()
     server.server_close()
     thread.join()
-    report = {"passed": len(checks) == 16 and all(checks.values()), "checks": checks, "controlled_release_server": True, "heartbeat": beats[0]}
+    report = {"passed": len(checks) == 20 and all(checks.values()), "checks": checks, "controlled_release_server": True, "heartbeat": beats[0]}
     (work / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps({**report, "directory": str(work)}), flush=True)
 assert report["passed"]

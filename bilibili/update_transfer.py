@@ -53,6 +53,16 @@ def transfer(client, info, folder, progress=None, stage=None):
         emit(target.stat().st_size, target.stat().st_size)
         tell("已复用通过校验的更新包。")
         return target
+    # A probe can itself be rate-limited. Do not delete a previously identified
+    # contiguous prefix merely because no new connection was established.
+    preserve_existing = False
+    if part.is_file() and meta.is_file() and info.sha256:
+        try:
+            previous = json.loads(meta.read_text(encoding="utf-8"))
+            preserve_existing = all(previous.get(k) == v for k, v in {
+                "version": info.version, "url": info.url, "sha256": info.sha256, "size": info.size}.items()) and 0 < part.stat().st_size <= info.size
+        except (OSError, ValueError):
+            pass
     ranged = False
     complete = False
     invalid = False
@@ -81,7 +91,7 @@ def transfer(client, info, folder, progress=None, stage=None):
         if ranged and part.is_file() and meta.is_file():
             try:
                 previous = json.loads(meta.read_text(encoding="utf-8"))
-                if previous == identity and 0 < part.stat().st_size <= total:
+                if all(previous.get(k) == identity[k] for k in ("version", "url", "sha256", "size")) and 0 < part.stat().st_size <= total:
                     resume = part.stat().st_size
             except (OSError, ValueError):
                 pass
@@ -91,17 +101,34 @@ def transfer(client, info, folder, progress=None, stage=None):
             meta.write_text(json.dumps(identity), encoding="utf-8")
             tell("正在续传更新包…" if resume else "正在下载更新包…")
             try:
-                range_transfer(client, info.url, part, total, resume, validator, emit)
+                from update_core import UpdateNetworkError
+                for attempt in range(3):
+                    try:
+                        range_transfer(client, info.url, part, total, resume, validator, emit,
+                                       connections=CONNECTIONS if attempt == 0 else 1)
+                        break
+                    except UpdateNetworkError as error:
+                        if attempt == 2:
+                            raise
+                        delay = getattr(error, "retry_after", None)
+                        delay = max(2 * (2 ** attempt), delay or 0)
+                        if delay > 60:
+                            raise
+                        tell(f"连接暂时中断，{delay:g} 秒后降低连接数续传…")
+                        if client.cancelled.wait(delay):
+                            client._cancel()
+                        resume = part.stat().st_size if part.is_file() else 0
+                        tell("正在使用单连接续传更新包…")
             except RangeUnavailable:
                 # Invalid range responses never get appended to the prefix.
                 ranged = False
                 part.unlink(missing_ok=True)
                 meta.unlink(missing_ok=True)
                 tell("服务器不支持可靠的分段传输，正在使用兼容下载。")
-                stream_transfer(client, info, part, emit)
+                stream_transfer(client, info, part, emit, stage=tell)
         else:
             tell("正在下载更新包…")
-            stream_transfer(client, info, part, emit)
+            stream_transfer(client, info, part, emit, stage=tell)
         client._cancel()
         tell("下载完成，正在校验安装包…")
         count = part.stat().st_size
@@ -126,12 +153,12 @@ def transfer(client, info, folder, progress=None, stage=None):
     except (OSError, ValueError, requests.RequestException) as error:
         raise UpdateError("更新下载中断，请重试；支持续传的已验证数据会保留。") from error
     finally:
-        if complete or invalid or not ranged:
+        if complete or invalid or (not ranged and not preserve_existing):
             part.unlink(missing_ok=True)
             meta.unlink(missing_ok=True)
 
 
-def stream_transfer(client, info, part, emit):
+def stream_transfer(client, info, part, emit, stage=None):
     from update_core import MAX_INSTALLER, UpdateError
     for attempt in range(3):
         client._cancel()
@@ -163,12 +190,17 @@ def stream_transfer(client, info, part, emit):
                 raise
             if attempt == 2:
                 raise
-            if client.cancelled.wait(0.5 * (attempt + 1)):
+            delay = max(2 * (2 ** attempt), getattr(error, "retry_after", None) or 0)
+            if delay > 60:
+                raise
+            if stage:
+                stage(f"连接暂时中断，{delay:g} 秒后重试下载…")
+            if client.cancelled.wait(delay):
                 client._cancel()
 
 
-def range_transfer(client, url, part, total, resume, validator, emit):
-    from update_core import UpdateError
+def range_transfer(client, url, part, total, resume, validator, emit, *, connections=CONNECTIONS):
+    from update_core import UpdateError, UpdateRateLimitError
     lock = threading.Lock()
     stop = threading.Event()
     active = {}
@@ -206,7 +238,7 @@ def range_transfer(client, url, part, total, resume, validator, emit):
                     return b"".join(chunks)
             except (requests.RequestException, UpdateError) as error:
                 from update_core import UpdateCancelled
-                if isinstance(error, UpdateCancelled) or (isinstance(error, UpdateError) and not getattr(error, "retryable", False)) or attempt == 2:
+                if isinstance(error, (UpdateCancelled, UpdateRateLimitError)) or getattr(error, "status_code", None) == 403 or (isinstance(error, UpdateError) and not getattr(error, "retryable", False)) or attempt == 2:
                     raise
                 if client.cancelled.wait(0.5 * (attempt + 1)):
                     client._cancel()
@@ -225,12 +257,12 @@ def range_transfer(client, url, part, total, resume, validator, emit):
         active.clear()
     emit(resume, total)
     with part.open("ab" if resume else "wb") as output:
-        with ThreadPoolExecutor(max_workers=CONNECTIONS, thread_name_prefix="update-range") as pool:
+        with ThreadPoolExecutor(max_workers=connections, thread_name_prefix="update-range") as pool:
             try:
                 while finished < total:
                     client._cancel()
                     pieces = [(offset, min(offset + BLOCK, total) - 1)
-                              for offset in range(finished, min(finished + CONNECTIONS * BLOCK, total), BLOCK)]
+                              for offset in range(finished, min(finished + connections * BLOCK, total), BLOCK)]
                     jobs = {start: pool.submit(fetch, start, end) for start, end in pieces}
                     pending = set(jobs.values())
                     while pending:

@@ -1,5 +1,6 @@
 """Public, credential-free GitHub update checks and verified installer downloads."""
 from dataclasses import dataclass
+from email.utils import parsedate_to_datetime
 import hashlib
 from pathlib import Path
 import re
@@ -23,6 +24,25 @@ class UpdateError(Exception):
 
 class UpdateNetworkError(UpdateError):
     retryable = True
+
+
+class UpdateRateLimitError(UpdateNetworkError):
+    def __init__(self, message, *, retry_after=None, status_code=429):
+        super().__init__(message)
+        self.retry_after = retry_after
+        self.status_code = status_code
+
+
+def retry_after_seconds(value):
+    if not value:
+        return None
+    try:
+        return max(0, float(value))
+    except (ValueError, TypeError):
+        try:
+            return max(0, parsedate_to_datetime(value).timestamp() - time.time())
+        except (ValueError, TypeError, OverflowError):
+            return None
 
 
 class UpdateCancelled(UpdateError):
@@ -112,6 +132,8 @@ class UpdateClient:
         self.sessions = []
         self.session_lock = threading.Lock()
         self.local = threading.local()
+        self.asset_redirects = {}
+        self.redirect_lock = threading.Lock()
         self.proxies = {}
         proxy = windows_system_proxy()
         environment = urllib.request.getproxies_environment()
@@ -143,39 +165,74 @@ class UpdateClient:
         self._cancel()
         if not hasattr(self.local, "session"):
             self.local.session = self._new_session()
+        original = url
+        # The range probe resolves the immutable release asset once. Reusing its
+        # short-lived official redirect avoids hundreds of github.com requests.
+        with self.redirect_lock:
+            cached = self.asset_redirects.get(original)
+        if cached and time.monotonic() - cached[1] < 300:
+            url = cached[0]
+        else:
+            cached = None
         deadline = time.monotonic() + 30
         try:
-            for hop in range(6):
-                parsed = urlparse(url)
-                local = self.allow_loopback and parsed.hostname in {"127.0.0.1", "localhost", "::1"}
-                if parsed.scheme != "https" and not (local and parsed.scheme == "http"):
-                    raise UpdateError("更新连接未使用 HTTPS。")
-                self._cancel()
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise UpdateNetworkError("连接 GitHub 超时，可重试或打开官方 Releases。")
-                response = self.local.session.get(url, params={"t": int(time.time())} if hop == 0 else None,
-                                            headers=headers, stream=True, timeout=(min(5, remaining), min(8, remaining)), allow_redirects=False,
-                                            proxies={"http": None, "https": None, "all": None} if local else None)
-                if response.is_redirect:
-                    url = urljoin(response.url, response.headers["Location"])
-                    response.close()
-                    continue
-                try:
-                    response.raise_for_status()
-                except requests.RequestException:
-                    response.close()
-                    raise
-                return response
-            raise UpdateError("更新连接重定向次数过多。")
+            for refresh in range(2):
+                for hop in range(6):
+                    parsed = urlparse(url)
+                    local = self.allow_loopback and parsed.hostname in {"127.0.0.1", "localhost", "::1"}
+                    if parsed.scheme != "https" and not (local and parsed.scheme == "http"):
+                        raise UpdateError("更新连接未使用 HTTPS。")
+                    allowed_host = parsed.hostname in {"github.com", "api.github.com", "release-assets.githubusercontent.com", "objects.githubusercontent.com"}
+                    if parsed.username or parsed.password or (not local and (not allowed_host or parsed.port not in (None, 443))):
+                        raise UpdateError("更新连接跳转到了非官方来源。")
+                    self._cancel()
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise UpdateNetworkError("连接 GitHub 超时，可重试或打开官方 Releases。")
+                    response = self.local.session.get(url,
+                        params={"t": int(time.time())} if hop == 0 and url == original else None,
+                        headers=headers, stream=True, timeout=(min(5, remaining), min(8, remaining)), allow_redirects=False,
+                        proxies={"http": None, "https": None, "all": None} if local else None)
+                    if response.is_redirect:
+                        url = urljoin(response.url, response.headers["Location"])
+                        response.close()
+                        continue
+                    # A signed asset URL may expire during a long download.
+                    # Discard it and resolve the public release address once.
+                    if cached and refresh == 0 and response.status_code in {400, 401, 403, 404, 410}:
+                        response.close()
+                        with self.redirect_lock:
+                            self.asset_redirects.pop(original, None)
+                        cached, url = None, original
+                        break
+                    try:
+                        response.raise_for_status()
+                    except requests.RequestException:
+                        response.close()
+                        raise
+                    if url != original and headers and headers.get("Range"):
+                        with self.redirect_lock:
+                            self.asset_redirects[original] = (url, time.monotonic())
+                    return response
+                else:
+                    raise UpdateError("更新连接重定向次数过多。")
+            raise UpdateNetworkError("更新包链接已过期，请重试。")
         except requests.Timeout as error:
             raise UpdateNetworkError("连接 GitHub 超时，请检查网络或使用官方 Releases 下载。") from error
         except requests.exceptions.ProxyError as error:
             raise UpdateNetworkError("系统代理连接失败，请检查代理设置后重试。") from error
         except requests.HTTPError as error:
-            code = error.response.status_code if error.response is not None else 0
-            message = "GitHub 暂时限制请求，请稍后重试。" if code in {403, 429} else f"GitHub 返回 HTTP {code}，请稍后重试。"
-            raise UpdateNetworkError(message) from error
+            response = error.response
+            code = response.status_code if response is not None else 0
+            headers = response.headers if response is not None else {}
+            delay = retry_after_seconds(headers.get("Retry-After"))
+            if code == 429 or (code == 403 and (delay is not None or headers.get("X-RateLimit-Remaining") == "0")):
+                raise UpdateRateLimitError("GitHub 暂时限制请求，已保留下载进度。", retry_after=delay, status_code=code) from error
+            message = "GitHub 拒绝了更新请求（HTTP 403），请稍后重试。" if code == 403 else f"GitHub 返回 HTTP {code}，请稍后重试。"
+            failure = UpdateNetworkError(message)
+            failure.status_code = code
+            failure.retry_after = delay
+            raise failure from error
         except requests.RequestException as error:
             raise UpdateNetworkError("无法连接 GitHub，请检查网络、系统代理或打开官方 Releases。") from error
 

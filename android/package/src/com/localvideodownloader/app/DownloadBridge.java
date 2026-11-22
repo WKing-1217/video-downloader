@@ -56,11 +56,12 @@ public final class DownloadBridge {
     }
     public static void start(String text, String mode, String videoFormat, String imageFormat, int bitrate) {
         if (activity == null) return;
+        final String normalizedText = normalizeShareText(text);
         activity.runOnUiThread(() -> {
             if (!DownloadService.isRunning()) results.remove(mode);
             if (Build.VERSION.SDK_INT >= 33 && activity.checkSelfPermission("android.permission.POST_NOTIFICATIONS") != 0)
                 activity.requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, 101);
-            Intent job = new Intent(activity, DownloadService.class).putExtra("text",text).putExtra("mode",mode)
+            Intent job = new Intent(activity, DownloadService.class).putExtra("text",normalizedText).putExtra("mode",mode)
                     .putExtra("video_format",videoFormat).putExtra("image_format",imageFormat).putExtra("audio_bitrate",bitrate);
             activity.startForegroundService(job);
         });
@@ -118,10 +119,14 @@ public final class DownloadBridge {
     public static void cancelUpdate() { UpdateDownload.cancel(); }
     public static void installUpdate() { UpdateDownload.install(); }
     public static void refreshUpdate() { UpdateDownload.refresh(); }
+    static String normalizeShareText(String text) {
+        return text == null ? "" : Pattern.compile("\\b(https?)\\\\(?=://)", Pattern.CASE_INSENSITIVE)
+                .matcher(text).replaceAll("$1");
+    }
     /** Match exact supported hosts; never leak a site session to a lookalike. */
     static String platformKey(String text) {
         if (text == null) return "";
-        Matcher links = Pattern.compile("https?://[^\\s<>\"“”。；！？]+", Pattern.CASE_INSENSITIVE).matcher(text);
+        Matcher links = Pattern.compile("https?://[^\\s<>\"“”。；！？]+", Pattern.CASE_INSENSITIVE).matcher(normalizeShareText(text));
         while (links.find()) {
             String candidate = links.group().replaceAll("[,）)\\]};、。]+$", "");
             Uri uri = Uri.parse(candidate);
